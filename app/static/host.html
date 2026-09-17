@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Northwind ERP — new supplier invoice</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .chrome { background: var(--ink); color: #cdd8e0; padding: 10px 24px; display:flex; align-items:center; gap:16px; font-size:13px; }
+  .chrome strong { color:#fff; font-weight:600; }
+  .chrome .who { margin-left:auto; font-size:12px; color:#8fa2b0; }
+  #panel iframe { border:1px solid var(--rule); border-radius:var(--radius); background:#fff; }
+  .form-row { display:grid; grid-template-columns: 150px 1fr; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid var(--rule-soft); }
+  .form-row:last-child { border-bottom:0; }
+  .form-row input { background:var(--canvas); }
+  .form-row input.filled { background:var(--confirm-soft); border-color:#bcdccc; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+
+<div class="chrome">
+  <!-- Just enough to read as somebody else's software. The nav links that used
+       to sit here went nowhere and only invited questions. -->
+  <strong>Northwind ERP</strong>
+  <span class="who">Signed in as <span id="who">j.moreau</span> · <span id="co">acme-gmbh</span></span>
+</div>
+
+<div class="wrap">
+  <div class="bar" style="margin-bottom:6px">
+    <h1>New supplier invoice</h1>
+    <div class="spacer"></div>
+    <button class="quiet" id="toggleCfg">Demo controls</button>
+  </div>
+  <p class="muted">
+    This page is the customer's own software. It already knows who is signed in, so the panel below
+    never asks anyone to log in — the company comes in with the embed.
+  </p>
+
+  <div id="cfg" class="card pad stack hidden" style="margin-bottom:20px">
+    <div class="grid2">
+      <div><label for="key">Application API key</label><input id="key" value="dk_test_demo_key"></div>
+      <div><label for="company">Company signed in to this ERP</label><input id="company" value="acme-gmbh"></div>
+    </div>
+    <div class="bar">
+      <button class="primary" id="connect">Load the panel</button>
+      <span class="small muted">In production this exchange happens on your server; the key never reaches the browser.</span>
+    </div>
+    <div class="small muted">
+      Switch the company to <span class="mono">bravo-ag</span> to show that corrections do <em>not</em> leak between customers.
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div>
+      <h3 style="margin-bottom:8px">Read a document</h3>
+      <!-- The panel mounts here. That div and the two script tags at the
+           bottom of this file are the entire client-side integration. -->
+      <div id="panel"></div>
+      <p id="err" class="notice warn hidden" style="margin-top:10px"></p>
+    </div>
+
+    <div>
+      <h3 style="margin-bottom:8px">Invoice record</h3>
+      <div class="card pad" id="form">
+        <p class="muted small" style="margin:0">The form fills itself when the panel returns data.</p>
+      </div>
+
+      <h3 style="margin:20px 0 8px">What the panel posted back</h3>
+      <pre class="json" id="out">waiting…</pre>
+    </div>
+  </div>
+</div>
+
+<script src="/embed.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+$('toggleCfg').onclick = () => $('cfg').classList.toggle('hidden');
+
+let panel = null;
+
+async function connect() {
+  const company = $('company').value.trim();
+  $('co').textContent = company;
+  try {
+    // ---- server-to-server in production; the key never reaches the browser ----
+    const res = await fetch('/api/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': $('key').value.trim() },
+      body: JSON.stringify({ company_id: company, user_ref: 'j.moreau' })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+
+    // ---- the whole integration ----
+    if (panel) panel.destroy();
+    panel = DocAI.mount('#panel', {
+      token: data.token,
+      onAccept: m => fillForm(m.json),
+      onResult: m => fillForm(m.json),
+      // A value the user just corrected should appear in the record straight
+      // away, not only once they press "Use this data".
+      onCorrected: m => fillForm(m.json),
+      onError: m => showError(m.message)
+    });
+
+    $('err').classList.add('hidden');
+  } catch (e) {
+    showError(e.message);
+  }
+}
+$('connect').onclick = connect;
+connect();
+
+function showError(msg) {
+  $('err').textContent = msg;
+  $('err').classList.remove('hidden');
+}
+
+const FIELDS = [
+  ['invoice_number', 'Invoice number'], ['invoice_date', 'Invoice date'],
+  ['due_date', 'Due date'], ['supplier_name', 'Supplier'],
+  ['supplier_vat_id', 'VAT ID'], ['customer_reference', 'Our reference'],
+  ['net_amount', 'Net'], ['tax_amount', 'Tax'], ['total_amount', 'Total'],
+  ['currency', 'Currency'], ['iban', 'IBAN']
+];
+
+function fillForm(json) {
+  if (!json) return;
+  $('out').textContent = JSON.stringify(json, null, 2);
+  const host = $('form');
+  host.innerHTML = '';
+  FIELDS.forEach(([k, label]) => {
+    const row = document.createElement('div');
+    row.className = 'form-row';
+    const v = json[k];
+    row.innerHTML = `<label style="margin:0">${label}</label>`;
+    const inp = document.createElement('input');
+    inp.value = v === null || v === undefined ? '' : v;
+    if (inp.value) inp.classList.add('filled');
+    row.appendChild(inp);
+    host.appendChild(row);
+  });
+}
+</script>
+</body>
+</html>

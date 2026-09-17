@@ -1,0 +1,862 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Read document</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  body { background: var(--surface); }
+  .panel { padding: 14px; }
+  .head { display: flex; align-items: center; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid var(--rule); margin-bottom: 14px; }
+  .split { display: grid; grid-template-columns: minmax(0,1.15fr) minmax(280px,1fr); gap: 16px; align-items: start; }
+  @media (max-width: 760px) { .split { grid-template-columns: 1fr; } }
+  .results { border: 1px solid var(--rule); border-radius: var(--radius); }
+  /* The one control that matters in correction mode, so it has to look like a
+     control. It was a `quiet` button before — transparent border on a
+     transparent background — which read as grey label text and left people
+     hunting for the button they were told to press. */
+  .field .mark {
+    font-size: 12px;
+    padding: 3px 10px;
+    color: var(--accent);
+    background: var(--surface);
+    border: 1px solid #bcd3ea;
+  }
+  .field .mark:hover { background: var(--accent-soft); border-color: var(--accent); }
+  .field .mark[aria-pressed="true"] {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .hidden { display: none !important; }
+  .foot { display:flex; gap:8px; align-items:center; padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--rule); }
+</style>
+</head>
+<body>
+<div class="panel">
+
+  <div class="head">
+    <div>
+      <div style="font-weight:600" id="appName">Read a document</div>
+      <div class="small muted" id="ctx">Connecting…</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="segmented" role="group" aria-label="Run type">
+      <button id="modeNormal" aria-pressed="true">Read</button>
+      <button id="modeTrain" aria-pressed="false">Correct</button>
+    </div>
+  </div>
+
+  <div id="drop" class="drop">
+    <h2>Drop a document here</h2>
+    <p class="muted small" style="margin:0 auto">PDF, scan or photo · nothing is stored</p>
+    <p style="margin:14px 0 0"><button class="primary" id="pick">Choose a file</button></p>
+    <input type="file" id="file" class="hidden"
+           accept=".pdf,.txt,.csv,.md,.png,.jpg,.jpeg,.webp,.tif,.tiff,.bmp">
+  </div>
+
+  <div id="busy" class="notice hidden"><span class="spin"></span> &nbsp;Reading <span id="busyName"></span>…</div>
+  <div id="err" class="notice warn hidden"></div>
+
+  <div id="result" class="hidden">
+    <div class="split">
+      <div>
+        <div class="bar small muted" style="margin-bottom:8px">
+          <span id="docName"></span><span class="spacer"></span>
+          <button class="quiet" id="again">Read another</button>
+        </div>
+        <div class="viewer card" id="viewer"></div>
+      </div>
+
+      <div>
+        <div class="results">
+          <div id="fields"></div>
+        </div>
+
+        <div class="foot">
+          <div class="small muted" id="hintNote"></div>
+          <div class="spacer"></div>
+          <button id="send" class="primary">Use this data</button>
+        </div>
+        <div id="saved" class="notice good hidden" style="margin-top:10px"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Served from this app, not a CDN. Without a rendered page there is nothing
+     to draw a rectangle on, so the correction loop would be the first thing to
+     break on a bad network — and that is the half of the product worth showing. -->
+<script src="/static/vendor/pdf.min.js"></script>
+<script>
+const PDFJS = window['pdfjs-dist/build/pdf'];
+if (PDFJS) PDFJS.GlobalWorkerOptions.workerSrc = '/static/vendor/pdf.worker.min.js';
+
+const params = new URLSearchParams(location.search);
+let token = params.get('token') || '';
+
+// A host page with a backend passes ?token=… , which is the right way round:
+// the API key stays on its server.
+//
+// A page with no backend can pass ?key=…&company_id=… instead and the panel
+// opens the session itself. That call is same-origin from in here, so it needs
+// no CORS. The cost is that the key sits in the host page's source, where a
+// reader can take it and open a session for any company under that
+// application — fine for a demo, not for a pilot.
+async function openSessionFromKey() {
+  const key = params.get('key');
+  if (token || !key) return;
+  // company_id is optional: an application registered with a company uses that
+  // one, so the embed carries only the key.
+  const company = params.get('company_id') || '';
+  const res = await fetch('/api/session', {
+    method: 'POST',
+    headers: { 'X-API-Key': key, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ company_id: company })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'That API key was not accepted.');
+  token = data.token;
+}
+const $ = id => document.getElementById(id);
+const state = {
+  mode: 'normal', fields: [], fingerprint: null, json: null, regions: true,
+  pending: {},            // field_path -> {page, bbox, anchor, value}
+  layoutTokens: [],       // this template's words, stored with a correction
+  pageText: [],           // the text the server read, for working out anchors
+  pageWords: [],          // its word boxes, for working out which label locates a value
+  marking: null,          // field_path currently being marked
+  editing: null,          // {path, page, bbox, value} awaiting confirmation
+  pageEls: [], textLayers: []
+};
+
+// ---------------------------------------------------------------- session ---
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { Authorization: 'Bearer ' + token, ...(opts.headers || {}) }
+  });
+  const body = await res.json().catch(() => ({ error: 'Unexpected response from the service.' }));
+  if (!res.ok) throw new Error(body.error || 'Request failed.');
+  return body;
+}
+
+(async () => {
+  try {
+    await openSessionFromKey();
+    if (!token) {
+      return fail('This panel needs a session token, or an API key and company, from the host page.');
+    }
+    const info = await api('/api/session-info');
+    $('appName').textContent = info.application;
+    // The company proves the panel inherited its identity from the host. The
+    // model it happens to be calling is not the user's concern.
+    $('ctx').textContent = info.company_id;
+    openChannel(info.iframe_origin || '*');
+    post({ type: 'docai:ready', company_id: info.company_id, application: info.application });
+  } catch (e) { fail(e.message); }
+})();
+
+function fail(msg) {
+  $('err').textContent = msg;
+  $('err').classList.remove('hidden');
+  post({ type: 'docai:error', message: msg });
+}
+
+// ------------------------------------------------------------------- mode ---
+
+function setMode(m) {
+  state.mode = m;
+  if (m !== 'training') { state.editing = null; state.marking = null; }
+  $('modeNormal').setAttribute('aria-pressed', m === 'normal');
+  $('modeTrain').setAttribute('aria-pressed', m === 'training');
+  if (state.fields.length) renderFields();
+}
+$('modeNormal').onclick = () => setMode('normal');
+$('modeTrain').onclick = () => setMode('training');
+
+// ------------------------------------------------------------------ input ---
+
+const drop = $('drop');
+$('pick').onclick = () => $('file').click();
+$('file').onchange = e => e.target.files[0] && handle(e.target.files[0]);
+['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, e => {
+  e.preventDefault(); drop.classList.add('over');
+}));
+['dragleave', 'drop'].forEach(t => drop.addEventListener(t, e => {
+  e.preventDefault(); drop.classList.remove('over');
+}));
+drop.addEventListener('drop', e => e.dataTransfer.files[0] && handle(e.dataTransfer.files[0]));
+$('again').onclick = () => {
+  $('result').classList.add('hidden'); drop.classList.remove('hidden');
+  $('saved').classList.add('hidden');
+  state.pending = {}; state.editing = null; state.marking = null;
+  // Clearing the input matters: with the same file still selected, choosing it
+  // again changes nothing, no change event fires and the document is never
+  // read — which looks exactly like a saved correction not being applied.
+  $('file').value = '';
+};
+
+async function handle(file) {
+  $('err').classList.add('hidden');
+  $('saved').classList.add('hidden');
+  state.pending = {};
+  state.editing = null;
+  state.marking = null;
+  drop.classList.add('hidden');
+  $('result').classList.add('hidden');
+  $('busyName').textContent = file.name;
+  $('busy').classList.remove('hidden');
+
+  const form = new FormData();
+  form.append('file', file);
+  form.append('mode', state.mode);
+
+  try {
+    const [data] = await Promise.all([
+      api('/api/extract', { method: 'POST', body: form }),
+      renderDocument(file)
+    ]);
+    state.fields = data.fields;
+    state.fingerprint = data.fingerprint;
+    state.layoutTokens = data.layout_tokens || [];
+    state.json = data.json;
+    state.pageText = (data.pages || []).map(p => p.text || '');
+    state.pageWords = (data.pages || []).map(p => ({ page: p.page, words: p.words || [] }));
+    $('docName').textContent = file.name;
+    state.regions = data.regions_available !== false;
+    // Only say something when the user would otherwise be puzzled — why a
+    // field cannot be marked, or why the page looks like plain text. How many
+    // regions were applied is our business, not theirs.
+    const note = [];
+    if (!state.pageEls.length) note.push('text preview — corrections are remembered by label here, not by region');
+    $('hintNote').textContent = note.join(' · ');
+    renderFields();
+    $('result').classList.remove('hidden');
+    post({ type: 'docai:result', json: data.json, run_id: data.run_id });
+  } catch (e) {
+    fail(e.message);
+    drop.classList.remove('hidden');
+  } finally {
+    $('busy').classList.add('hidden');
+    // Same reason: so the very next pick of this same file is seen as a change.
+    $('file').value = '';
+  }
+}
+
+// ---------------------------------------------------------------- preview ---
+
+// The server identifies a PDF by its first bytes, so the panel does too.
+// Trusting the file name instead meant a PDF saved as "scan" or "invoice.bin"
+// was parsed on the server but dumped as raw text here — Mark appeared with
+// nothing underneath it to draw on.
+async function looksLikePdf(file) {
+  try {
+    const head = new Uint8Array(await file.slice(0, 5).arrayBuffer());
+    return String.fromCharCode.apply(null, head).indexOf('%PDF') === 0;
+  } catch (e) {
+    return /\.pdf$/i.test(file.name);
+  }
+}
+
+async function renderDocument(file) {
+  const viewer = $('viewer');
+  viewer.innerHTML = '';
+  state.pageEls = []; state.textLayers = [];
+
+  const isPdf = await looksLikePdf(file);
+
+  // A photo or a scan saved as an image: show it, and let boxes be drawn on it
+  // exactly as on a rendered PDF page. There is no text layer to prefill from.
+  if (!isPdf && (file.type.startsWith('image/') || /\.(png|jpe?g|webp|tiff?|bmp|gif)$/i.test(file.name))) {
+    const wrap = document.createElement('div');
+    wrap.className = 'page-wrap';
+    const img = document.createElement('img');
+    img.style.cssText = 'display:block;width:100%';
+    img.alt = file.name;
+    const overlay = document.createElement('div');
+    overlay.className = 'overlay';
+    wrap.append(img, overlay);
+    viewer.appendChild(wrap);
+    await new Promise(res => {
+      img.onload = img.onerror = res;
+      img.src = URL.createObjectURL(file);
+    });
+    state.textLayers.push([]);
+    state.pageEls.push({ page: 1, overlay, wrap });
+    attachMarking(1, overlay);
+    return;
+  }
+
+  if (!PDFJS || !isPdf) {
+    const pre = document.createElement('pre');
+    pre.className = 'mono small';
+    pre.style.cssText = 'white-space:pre-wrap;padding:14px;margin:0;background:#fff';
+    pre.textContent = await file.text();
+    viewer.appendChild(pre);
+    return;
+  }
+
+  const buf = await file.arrayBuffer();
+  const pdf = await PDFJS.getDocument({ data: buf }).promise;
+  for (let n = 1; n <= pdf.numPages; n++) {
+    const page = await pdf.getPage(n);
+    const scale = Math.min(1.5, 620 / page.getViewport({ scale: 1 }).width);
+    const viewport = page.getViewport({ scale });
+
+    const wrap = document.createElement('div');
+    wrap.className = 'page-wrap';
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width; canvas.height = viewport.height;
+    const overlay = document.createElement('div');
+    overlay.className = 'overlay';
+    wrap.append(canvas, overlay);
+    viewer.appendChild(wrap);
+
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+
+    // Keep a positioned copy of the text so a drawn box can prefill its value.
+    //
+    // The box is built from the item's own matrix rather than by adding its
+    // width along x: on a rotated page the text runs down the page, and
+    // assuming horizontal gives a wide flat box where a tall narrow one
+    // belongs. (t[0],t[1]) is the direction the text advances in and
+    // (t[2],t[3]) the direction it rises, both already carrying the page
+    // rotation, so the four corners follow from them.
+    const content = await page.getTextContent();
+    state.textLayers.push(content.items.map(it => {
+      const t = PDFJS.Util.transform(viewport.transform, it.transform);
+      const run = Math.hypot(t[0], t[1]) || 1;
+      const len = it.width * scale;
+      const ax = (t[0] / run) * len, ay = (t[1] / run) * len;   // along the text
+      const ux = t[2], uy = t[3];                               // up from the baseline
+      const xs = [t[4], t[4] + ax, t[4] + ux, t[4] + ax + ux];
+      const ys = [t[5], t[5] + ay, t[5] + uy, t[5] + ay + uy];
+      return {
+        str: it.str,
+        x0: Math.min.apply(null, xs) / viewport.width,
+        y0: Math.min.apply(null, ys) / viewport.height,
+        x1: Math.max.apply(null, xs) / viewport.width,
+        y1: Math.max.apply(null, ys) / viewport.height
+      };
+    }));
+    state.pageEls.push({ page: n, overlay, wrap });
+    attachMarking(n, overlay);
+  }
+}
+
+function drawBoxes(activePath) {
+  state.pageEls.forEach(p => p.overlay.querySelectorAll('.box').forEach(b => b.remove()));
+  const put = (page, bbox, cls) => {
+    const p = state.pageEls.find(x => x.page === page);
+    if (!p) return;
+    const el = document.createElement('div');
+    el.className = 'box ' + cls;
+    el.style.left = (bbox[0] * 100) + '%';
+    el.style.top = (bbox[1] * 100) + '%';
+    el.style.width = ((bbox[2] - bbox[0]) * 100) + '%';
+    el.style.height = ((bbox[3] - bbox[1]) * 100) + '%';
+    p.overlay.appendChild(el);
+  };
+  state.fields.forEach(f => {
+    if (!f.bbox) return;
+    let cls = f.confidence < 0.5 ? 'flagged' : '';
+    if (f.path === activePath) cls += ' pulse';
+    put(f.page, f.bbox, cls);
+  });
+  // A correction made by typing has no rectangle, so there is nothing to draw.
+  Object.entries(state.pending).forEach(([path, c]) =>
+    c.bbox && put(c.page, c.bbox, 'marked' + (path === activePath ? ' pulse' : '')));
+  // The rectangle just drawn, still being confirmed in the row below.
+  if (state.editing && state.editing.bbox) {
+    put(state.editing.page, state.editing.bbox, 'marked pulse');
+  }
+}
+
+// ------------------------------------------------------------- field list ---
+
+function renderFields() {
+  const host = $('fields');
+  host.innerHTML = '';
+  state.fields.forEach(f => {
+    const pend = state.pending[f.path];
+    const row = document.createElement('div');
+    row.className = 'field';
+
+    const name = document.createElement('div');
+    name.className = 'name';
+    name.textContent = f.label;
+    name.title = f.description || '';
+
+    const val = document.createElement('div');
+    const shown = pend ? pend.value : f.value;
+    if (shown === null || shown === '' || shown === undefined) {
+      val.className = 'val empty'; val.textContent = 'not found';
+    } else {
+      val.className = 'val'; val.textContent = shown;
+    }
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    if (pend) {
+      meta.innerHTML = pend.stored
+        ? '<span class="pill ok">remembered</span>'
+        : '<span class="pill low">saving…</span>';
+    } else if (f.corrected) {
+      meta.innerHTML = '<span class="pill ok">corrected</span>';
+    } else if (f.value !== null && f.value !== '' && f.confidence < 0.5) {
+      // A badge on every row is a score nobody reads, and eleven of them turn
+      // the list into wallpaper. Only the rows worth a second look say
+      // anything; a value with no badge was read normally. The exact
+      // confidence is still in the API response for hosts that want it, and a
+      // field that came back empty already says "not found" in its own column.
+      meta.innerHTML = '<span class="pill low">check</span>';
+    }
+    const editingHere = state.editing && state.editing.path === f.path;
+    // Always offered in correction mode. Drawing a box is the precise way and
+    // needs a rendered page; typing the value works on anything, because the
+    // anchor is taken from the document text. Either way the field can be
+    // fixed, which is what stops this being "works on some documents".
+    if (state.mode === 'training' && !editingHere) {
+      const b = document.createElement('button');
+      b.className = 'mark';
+      b.textContent = 'Fix';
+      b.title = state.pageEls.length
+        ? `Correct ${f.label} — type it, or drag a box on the page`
+        : `Correct ${f.label}`;
+      b.onclick = () => startFix(f.path);
+      meta.appendChild(b);
+    }
+
+    row.append(name, val, meta);
+    if (editingHere) {
+      row.classList.add('active');
+      row.append(editorRow(f));
+    }
+    row.onmouseenter = () => { row.classList.add('active'); drawBoxes(f.path); };
+    row.onmouseleave = () => {
+      if (editingHere) return;          // keep the box visible while editing it
+      row.classList.remove('active');
+      drawBoxes(state.editing ? state.editing.path : state.marking);
+    };
+    host.appendChild(row);
+  });
+  drawBoxes(state.editing ? state.editing.path : state.marking);
+}
+
+// ---------------------------------------------------------------- marking ---
+
+function startFix(path) {
+  const field = state.fields.find(f => f.path === path);
+  const shown = field && field.value !== null && field.value !== undefined
+    ? String(field.value) : '';
+  // Open the editor straight away so there is always something to type into,
+  // and arm drawing as well when there is a page to draw on. A drag then
+  // replaces what was typed via confirmMark.
+  state.editing = { path, page: 1, bbox: null, value: shown };
+  state.marking = state.pageEls.length ? path : null;
+  if (state.marking) {
+    document.querySelectorAll('.viewer').forEach(v => v.classList.add('marking'));
+  }
+  renderFields();
+}
+
+// Which label locates this value, and where the value sits relative to it.
+//
+// Geometry first, because that is how documents are actually built: a table
+// heading sits above its column and a form caption to the left of its box,
+// and neither is next to the value once the text is flattened into lines. A
+// line-based guess only ever worked on "Label: value" documents, which is why
+// real invoices learned nothing.
+//
+// Returns {anchor, rel} with rel one of right_of / below / line.
+function deriveAnchor(value, pageNo, bbox) {
+  const clean = (value || '').trim();
+  if (!clean) return { anchor: '', rel: '' };
+
+  const spatial = spatialAnchor(clean, pageNo, bbox);
+  if (spatial.anchor) return spatial;
+
+  // Nothing positional to go on — fall back to the same-line reading.
+  const pages = state.pageText.length ? state.pageText : [''];
+  const order = [pageNo - 1, ...pages.map((_, i) => i)];
+  for (const i of order) {
+    const text = pages[i];
+    if (!text) continue;
+    const at = text.indexOf(clean);
+    if (at === -1) continue;
+    const lineStart = text.lastIndexOf('\n', at) + 1;
+    let before = text.slice(lineStart, at).trim();
+    if (!before && lineStart > 1) {
+      const prevEnd = lineStart - 1;
+      const prevStart = text.lastIndexOf('\n', prevEnd - 1) + 1;
+      before = text.slice(prevStart, prevEnd).trim();
+    }
+    if (before) return { anchor: before.slice(-60), rel: 'line' };
+  }
+  return { anchor: '', rel: '' };
+}
+
+function spatialAnchor(value, pageNo, bbox) {
+  const page = (state.pageWords || []).find(p => p.page === (pageNo || 1))
+            || (state.pageWords || [])[0];
+  if (!page || !page.words || !page.words.length) return { anchor: '', rel: '' };
+  const words = page.words;
+
+  // Where is the value on the page? The drawn box if there is one, otherwise
+  // find the value's own words.
+  let box = bbox;
+  if (!box) {
+    const tokens = value.split(/\s+/).filter(Boolean).map(norm);
+    for (let i = 0; i < words.length && !box; i++) {
+      if (norm(words[i].text) !== tokens[0]) continue;
+      const span = words.slice(i, i + tokens.length);
+      if (span.length < tokens.length) continue;
+      if (span.map(w => norm(w.text)).join(' ') === tokens.join(' ')) {
+        box = [Math.min(...span.map(w => w.x0)), Math.min(...span.map(w => w.y0)),
+               Math.max(...span.map(w => w.x1)), Math.max(...span.map(w => w.y1))];
+      }
+    }
+  }
+  if (!box) return { anchor: '', rel: '' };
+
+  const [x0, y0, x1, y1] = box;
+  const midY = (y0 + y1) / 2, midX = (x0 + x1) / 2;
+  const rowBand = Math.max(0.012, (y1 - y0) * 0.7);
+  const inValue = w => w.x1 > x0 - 0.002 && w.x0 < x1 + 0.002
+                    && w.y1 > y0 - 0.002 && w.y0 < y1 + 0.002;
+
+  // A caption to the left, on the same row.
+  const left = words
+    .filter(w => !inValue(w) && w.x1 <= x0 + 0.004
+              && Math.abs((w.y0 + w.y1) / 2 - midY) <= rowBand)
+    .sort((a, b) => b.x1 - a.x1);
+  if (left.length) {
+    const label = phraseFrom(left, w => w.x1, 0.06).reverse();
+    const text = label.map(w => w.text).join(' ').trim();
+    if (looksLikeLabel(text)) return { anchor: text.slice(-60), rel: 'right_of' };
+  }
+
+  // A heading above, in the same column.
+  const above = words
+    .filter(w => !inValue(w) && w.y1 <= y0 + 0.004
+              && Math.abs((w.x0 + w.x1) / 2 - midX) <= Math.max(0.02, (x1 - x0) * 0.6))
+    .sort((a, b) => b.y1 - a.y1);
+  if (above.length) {
+    const nearest = above[0].y1;
+    const row = above.filter(w => nearest - w.y1 <= 0.012).sort((a, b) => a.x0 - b.x0);
+    const text = row.map(w => w.text).join(' ').trim();
+    if (looksLikeLabel(text)) return { anchor: text.slice(-60), rel: 'below' };
+  }
+  return { anchor: '', rel: '' };
+}
+
+// Words running away from the value until a wide gap — the next column.
+function phraseFrom(sorted, edge, gap) {
+  const out = [];
+  for (let i = 0; i < sorted.length; i++) {
+    if (i && Math.abs(edge(sorted[i - 1]) - sorted[i].x1) > gap
+          && Math.abs(sorted[i - 1].x0 - edge(sorted[i])) > gap) break;
+    out.push(sorted[i]);
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
+// A label is words, not another number. "Auftragsnummer" anchors; "1.234,00"
+// would match anything.
+function looksLikeLabel(text) {
+  const t = (text || '').trim();
+  if (t.length < 2 || t.length > 60) return false;
+  return /[A-Za-zÄÖÜäöüß]{2,}/.test(t);
+}
+
+function norm(s) {
+  return String(s).replace(/[^\w.,/-]/g, '').toLowerCase();
+}
+
+function attachMarking(pageNo, overlay) {
+  let start = null, rect = null;
+  const rel = e => {
+    const b = overlay.getBoundingClientRect();
+    return [(e.clientX - b.left) / b.width, (e.clientY - b.top) / b.height];
+  };
+  overlay.addEventListener('mousedown', e => {
+    if (!state.marking) return;
+    e.preventDefault();
+    start = rel(e);
+    rect = document.createElement('div');
+    rect.className = 'box marked';
+    overlay.appendChild(rect);
+  });
+  overlay.addEventListener('mousemove', e => {
+    if (!start) return;
+    const [x, y] = rel(e);
+    Object.assign(rect.style, {
+      left: Math.min(start[0], x) * 100 + '%',
+      top: Math.min(start[1], y) * 100 + '%',
+      width: Math.abs(x - start[0]) * 100 + '%',
+      height: Math.abs(y - start[1]) * 100 + '%'
+    });
+  });
+  overlay.addEventListener('mouseup', e => {
+    if (!start) return;
+    const [x, y] = rel(e);
+    const bbox = [Math.min(start[0], x), Math.min(start[1], y), Math.max(start[0], x), Math.max(start[1], y)];
+    start = null;
+    document.querySelectorAll('.viewer').forEach(v => v.classList.remove('marking'));
+    if (bbox[2] - bbox[0] < 0.005 || bbox[3] - bbox[1] < 0.004) { rect.remove(); state.marking = null; return renderFields(); }
+    confirmMark(state.marking, pageNo, bbox);
+  });
+}
+
+// What the server will read out of this rectangle.
+//
+// The server's words are the source, not pdf.js's text layer. On a scan that
+// layer is empty — the page is a picture, the text only exists because OCR
+// read it — so prefilling from it gave nothing and a drag on a scanned
+// document looked broken. Using the server's words also means the value shown
+// is exactly the value that will be read back next time.
+function textIn(pageNo, bbox) {
+  const fromServer = wordsInBox(pageNo, bbox);
+  if (fromServer) return fromServer;
+  const layer = state.textLayers[pageNo - 1] || [];
+  return layer
+    .filter(it => {
+      const cx = (it.x0 + it.x1) / 2, cy = (it.y0 + it.y1) / 2;
+      return cx >= bbox[0] - .005 && cx <= bbox[2] + .005 && cy >= bbox[1] - .005 && cy <= bbox[3] + .005;
+    })
+    .sort((a, b) => (a.y0 - b.y0) || (a.x0 - b.x0))
+    .map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function wordsInBox(pageNo, bbox) {
+  const page = (state.pageWords || []).find(p => p.page === pageNo);
+  if (!page || !page.words || !page.words.length) return '';
+  const pad = 0.004;
+  const [x0, y0, x1, y1] = bbox;
+  return page.words
+    .filter(w => {
+      const cx = (w.x0 + w.x1) / 2, cy = (w.y0 + w.y1) / 2;
+      return cx >= x0 - pad && cx <= x1 + pad && cy >= y0 - pad && cy <= y1 + pad;
+    })
+    .sort((a, b) => (Math.round(a.y0 * 100) - Math.round(b.y0 * 100)) || (a.x0 - b.x0))
+    .map(w => w.text).join(' ').replace(/\s+/g, ' ').trim();
+}
+
+// The value is confirmed in the field row itself, never in a browser dialog:
+// Chrome ignores prompt() inside a cross-origin iframe, which is exactly how
+// this panel is meant to be embedded, so a dialog here would simply do nothing
+// for every real host application.
+function confirmMark(path, page, bbox) {
+  const read = textIn(page, bbox).replace(/^[^:]{2,28}:\s*/, '');
+  // Stay armed when the box came back empty, so a second, larger drag needs no
+  // extra click.
+  state.marking = read ? null : path;
+  if (state.marking) {
+    document.querySelectorAll('.viewer').forEach(v => v.classList.add('marking'));
+  }
+  const previous = state.editing && state.editing.path === path ? state.editing.value : '';
+  state.editing = {
+    path, page, bbox,
+    // A rectangle that reads nothing used to blank the field, which looked
+    // like the drag had failed. Keep what was there and say what happened.
+    value: read || previous,
+    emptyRead: !read
+  };
+  renderFields();
+}
+
+function commitEdit(value) {
+  const e = state.editing;
+  if (!e) return;
+  state.editing = null;
+  state.marking = null;
+  document.querySelectorAll('.viewer').forEach(v => v.classList.remove('marking'));
+  const clean = (value || '').trim();
+  if (clean) {
+    const found = deriveAnchor(clean, e.page || 1, e.bbox);
+    state.pending[e.path] = {
+      page: e.page || 1,
+      bbox: e.bbox || null,
+      anchor: found.anchor,
+      anchor_rel: found.rel,
+      value: clean
+    };
+    applyCorrection(e.path, clean);
+    // Stored as soon as it is confirmed. A separate "save" step meant a
+    // correction looked applied, and then the next upload of the same document
+    // knew nothing about it — the confirmation *is* the intent.
+    storeCorrection(e.path);
+  }
+  renderFields();
+}
+
+async function storeCorrection(path) {
+  const c = state.pending[path];
+  if (!c) return;
+  if (!c.bbox && !c.anchor) {
+    // Nothing to find it by next time: not on the page, and no label near it.
+    fail('That value is not in the document, so it cannot be remembered for next '
+       + 'time. It is corrected here — drag a box around it to make it stick.');
+    return;
+  }
+  try {
+    const r = await api('/api/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fingerprint: state.fingerprint,
+        layout_tokens: state.layoutTokens,
+        corrections: [{
+          field_path: path, page: c.page, bbox: c.bbox || [],
+          anchor: c.anchor || '', anchor_rel: c.anchor_rel || '', value: c.value
+        }]
+      })
+    });
+    c.stored = true;
+    $('saved').textContent =
+      `Remembered for this document type across company ${r.company_id}. `
+      + `${r.regions_for_this_layout} field${r.regions_for_this_layout > 1 ? 's' : ''} so far.`;
+    $('saved').classList.remove('hidden');
+    post({ type: 'docai:save', saved: r.saved, regions: r.regions_for_this_layout,
+           company_id: r.company_id });
+    renderFields();
+  } catch (e) {
+    fail(e.message);
+  }
+}
+
+// A correction is the user telling us the right answer. It has to land in the
+// data the host application actually receives, not only in the list on screen —
+// otherwise "Use this data" quietly hands over the value the user just fixed.
+function applyCorrection(path, raw) {
+  const field = state.fields.find(f => f.path === path);
+  const value = field && field.type === 'number' ? toNumber(raw) : raw;
+  if (field) {
+    field.value = value;
+    field.confidence = 1;
+    field.corrected = true;     // survives the pending list being cleared on save
+  }
+  if (!state.json) state.json = {};
+  assignPath(state.json, path, value);
+  // Let the host update its form straight away rather than waiting for the
+  // user to press "Use this data".
+  post({ type: 'docai:corrected', json: state.json, field_path: path, value: value });
+}
+
+function assignPath(obj, path, value) {
+  const parts = path.split('.');
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (!cur[parts[i]] || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
+    cur = cur[parts[i]];
+  }
+  cur[parts[parts.length - 1]] = value;
+}
+
+// Same rules the server applies, so a hand-typed "1.234,56" arrives as a
+// number rather than a string for a numeric field.
+function toNumber(raw) {
+  let s = String(raw).replace(/[^\d.,-]/g, '');
+  if (s.indexOf(',') > -1 && s.indexOf('.') > -1) {
+    s = s.lastIndexOf(',') > s.lastIndexOf('.')
+      ? s.replace(/\./g, '').replace(',', '.')
+      : s.replace(/,/g, '');
+  } else if (s.indexOf(',') > -1) {
+    s = s.replace(',', '.');
+  }
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
+function cancelEdit() {
+  state.editing = null;
+  state.marking = null;
+  document.querySelectorAll('.viewer').forEach(v => v.classList.remove('marking'));
+  drawBoxes();
+  renderFields();
+}
+
+function editorRow(field) {
+  const wrap = document.createElement('div');
+  wrap.className = 'editor';
+  wrap.style.cssText = 'grid-column:1 / span 2;display:flex;gap:6px;align-items:center;margin-top:4px';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = state.editing.value;
+  input.setAttribute('aria-label', `Correct value for ${field.label}`);
+  input.placeholder = 'Type the correct value';
+  // width:100% is the global input rule; inside a flex row it must shrink instead.
+  input.style.cssText = 'font-family:var(--mono);font-size:13px;flex:1;min-width:0';
+  input.onkeydown = ev => {
+    if (ev.key === 'Enter') { ev.preventDefault(); commitEdit(input.value); }
+    if (ev.key === 'Escape') { ev.preventDefault(); cancelEdit(); }
+  };
+
+  const ok = document.createElement('button');
+  ok.className = 'primary small';
+  ok.textContent = 'Set';
+  ok.onclick = () => commitEdit(input.value);
+
+  const no = document.createElement('button');
+  no.className = 'quiet small';
+  no.textContent = 'Cancel';
+  no.onclick = cancelEdit;
+
+  wrap.append(input, ok, no);
+  const aside = document.createElement('span');
+  aside.className = 'small';
+  aside.style.whiteSpace = 'nowrap';
+  if (state.editing.emptyRead) {
+    aside.style.color = 'var(--flag)';
+    aside.textContent = 'no text in that box — type it';
+  } else if (state.marking === field.path) {
+    aside.className = 'small muted';
+    aside.textContent = 'or drag a box';
+  }
+  if (aside.textContent) wrap.appendChild(aside);
+  setTimeout(() => { input.focus(); input.select(); }, 0);
+  return wrap;
+}
+
+// ------------------------------------------------------------------- save ---
+
+$('send').onclick = () => {
+  post({ type: 'docai:accepted', json: state.json });
+  $('saved').textContent = 'Sent to the application.';
+  $('saved').classList.remove('hidden');
+};
+
+// --------------------------------------------------------- host messaging ---
+// Extracted data only ever goes to the origin registered for this application.
+// Until /api/session-info says what that is, messages wait rather than being
+// broadcast to whatever happens to be framing us.
+
+let parentOrigin = null;
+const outbox = [];
+
+function openChannel(origin) {
+  parentOrigin = origin;
+  while (outbox.length) post(outbox.shift());
+  if (window.parent === window) return;
+  const report = () => post({
+    type: 'docai:resize',
+    height: Math.ceil(document.documentElement.scrollHeight)
+  });
+  if (window.ResizeObserver) new ResizeObserver(report).observe(document.body);
+  window.addEventListener('load', report);
+  report();
+}
+
+function post(msg) {
+  if (window.parent === window) return;
+  if (!parentOrigin) { outbox.push(msg); return; }
+  window.parent.postMessage(msg, parentOrigin);
+}
+</script>
+</body>
+</html>

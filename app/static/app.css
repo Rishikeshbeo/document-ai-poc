@@ -1,0 +1,192 @@
+/* Document AI — shared styles.
+   Cool paper + ink. One accent (stamp blue), one flag (amber), one confirm (green). */
+
+/* Self-hosted. Hotlinking Google Fonts would send every end user's IP address
+   to a US server on page load — the one thing this product promises not to do,
+   and something a German court has already ruled a GDPR breach. 75 KB total. */
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('/static/vendor/fonts/plex-sans-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/static/vendor/fonts/plex-mono-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/static/vendor/fonts/plex-mono-500.woff2') format('woff2');
+}
+
+:root {
+  --canvas: #eef1f3;
+  --surface: #ffffff;
+  --ink: #15212b;
+  --muted: #5b6b78;
+  --rule: #cfd8de;
+  --rule-soft: #e4eaee;
+  --accent: #1f5fa8;
+  --accent-soft: #e8f0f9;
+  --flag: #8a5300;
+  --flag-soft: #fbf0df;
+  --confirm: #17694a;
+  --confirm-soft: #e3f1ea;
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --radius: 3px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--canvas);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 { font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+h1 { font-size: 21px; }
+h2 { font-size: 16px; }
+h3 { font-size: 13px; color: var(--muted); font-weight: 500; }
+p { margin: 0 0 10px; max-width: 68ch; }
+a { color: var(--accent); }
+
+.mono { font-family: var(--mono); }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+
+/* --- controls --- */
+
+button {
+  font: inherit;
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 7px 13px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary:hover { background: #17497f; }
+/* Destructive, so it reads as available rather than inviting: outlined until
+   you are on it. */
+button.danger { color: #a3392c; border-color: #e3c4c0; background: var(--surface); }
+button.danger:hover { background: #fdf3f2; border-color: #a3392c; }
+button.quiet { background: transparent; border-color: transparent; color: var(--muted); padding: 4px 7px; }
+button.quiet:hover { color: var(--ink); background: var(--rule-soft); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+
+input, textarea, select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 6px 9px;
+  width: 100%;
+}
+input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+textarea { font-family: var(--mono); font-size: 12.5px; line-height: 1.5; resize: vertical; }
+label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+
+/* --- segmented mode switch --- */
+
+.segmented { display: inline-flex; border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+.segmented button { border: 0; border-radius: 0; padding: 5px 12px; font-size: 13px; color: var(--muted); }
+.segmented button + button { border-left: 1px solid var(--rule); }
+.segmented button[aria-pressed="true"] { background: var(--ink); color: #fff; }
+
+/* --- layout --- */
+
+.wrap { max-width: 1080px; margin: 0 auto; padding: 28px 24px 64px; }
+.bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.spacer { flex: 1; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); }
+.pad { padding: 16px; }
+.stack > * + * { margin-top: 14px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 820px) { .grid2 { grid-template-columns: 1fr; } }
+
+/* --- field rows --- */
+
+.field {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--rule-soft);
+  cursor: default;
+}
+.field:last-child { border-bottom: 0; }
+.field:hover, .field.active { background: var(--accent-soft); }
+.field .name { font-size: 12px; color: var(--muted); grid-column: 1; }
+.field .val { font-family: var(--mono); font-size: 13px; grid-column: 1; word-break: break-word; }
+.field .val.empty { color: var(--flag); font-style: italic; font-family: var(--sans); }
+.field .meta { grid-column: 2; grid-row: 1 / span 2; display: flex; align-items: center; gap: 6px; }
+
+.pill { font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid; white-space: nowrap; }
+.pill.ok { color: var(--confirm); border-color: #bcdccc; background: var(--confirm-soft); }
+.pill.low { color: var(--flag); border-color: #e8d2a8; background: var(--flag-soft); }
+
+/* --- document preview with overlay --- */
+
+.viewer { position: relative; background: var(--rule-soft); overflow: auto; max-height: 560px; padding: 12px; }
+.page-wrap { position: relative; margin: 0 auto 12px; width: fit-content; max-width: 100%; box-shadow: 0 1px 0 var(--rule), 0 6px 18px rgba(21,33,43,.10); }
+/* The page is rendered up to 620px wide, which is wider than the panel gets in
+   a half-width iframe. Scaling it down beats a horizontal scrollbar: the
+   overlay is pinned to this box and rectangles are stored as fractions, so a
+   smaller page changes nothing about what a drawn box means. */
+.page-wrap canvas { display: block; max-width: 100%; height: auto; }
+.overlay { position: absolute; inset: 0; }
+.box { position: absolute; border: 1.5px solid var(--accent); background: rgba(31,95,168,.10); pointer-events: none; }
+.box.flagged { border-color: var(--flag); background: rgba(138,83,0,.10); }
+.box.pulse { background: rgba(31,95,168,.28); }
+.box.marked { border-style: dashed; border-color: var(--confirm); background: rgba(23,105,74,.12); }
+.marking .overlay { cursor: crosshair; }
+
+/* --- drop zone --- */
+
+.drop {
+  border: 1.5px dashed var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 40px 24px;
+  text-align: center;
+}
+.drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.drop h2 { margin-bottom: 4px; }
+
+/* --- misc --- */
+
+.notice { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 9px 12px; font-size: 13px; }
+.notice.warn { border-color: var(--flag); background: var(--flag-soft); }
+.notice.good { border-color: var(--confirm); background: var(--confirm-soft); }
+
+pre.json {
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+  background: #0f1a22; color: #d7e3ec; padding: 14px; margin: 0;
+  border-radius: var(--radius); overflow: auto; max-height: 420px;
+}
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 6px 10px; border-bottom: 1px solid var(--rule); }
+td { padding: 7px 10px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+
+.spin { display: inline-block; width: 13px; height: 13px; border: 2px solid var(--rule); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -2px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 3s; } }

@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Example application — Document AI panel embedded</title>
+<style>
+  :root {
+    --ink: #1b2430; --muted: #64748b; --line: #dde3ea;
+    --bg: #f6f7f9; --card: #ffffff; --brand: #6d4aff; --ok: #0f7a52;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    background: var(--ink); color: #eef2f7; padding: 12px 26px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  header b { color: #fff; letter-spacing: -0.01em; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 26px; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .lede { color: var(--muted); margin: 0 0 22px; max-width: 64ch; }
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin: 0 0 8px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+  #docai { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; display: block; }
+  .row { display: grid; grid-template-columns: 150px 1fr; gap: 12px; align-items: center; padding: 9px 14px; border-bottom: 1px solid #eef1f5; }
+  .row:last-child { border-bottom: 0; }
+  .row label { font-size: 13px; color: var(--muted); }
+  .row input {
+    font: inherit; font-size: 14px; padding: 7px 10px; width: 100%;
+    border: 1px solid var(--line); border-radius: 5px; background: #fbfcfd;
+  }
+  .row input.filled { background: #f0fbf5; border-color: #b9e2cd; }
+  .bar { display: flex; gap: 10px; align-items: center; padding: 14px; border-top: 1px solid var(--line); }
+  button.post {
+    font: inherit; font-weight: 600; color: #fff; background: var(--brand);
+    border: 0; border-radius: 6px; padding: 9px 16px; cursor: pointer;
+  }
+  button.post:disabled { opacity: .45; cursor: not-allowed; }
+  .said { font-size: 13px; color: var(--ok); }
+  .log { font: 12px/1.6 ui-monospace, Menlo, monospace; background: #111823; color: #cfe0f0; border-radius: 8px; padding: 12px 14px; margin-top: 14px; white-space: pre-wrap; max-height: 200px; overflow: auto; }
+</style>
+</head>
+<body>
+
+<header>
+  <b>Example application</b>
+  <span style="font-size:13px;color:#9fb0c0">stands in for your software</span>
+</header>
+
+<div class="wrap">
+  <h1>Read a document into this form</h1>
+  <p class="lede">
+    A plain HTML page. The panel is the iframe below, with the API key and the
+    company written straight into the markup — there is no backend here at all.
+    The form on the right is this application's own; drop a document into the
+    panel and watch it fill.
+  </p>
+
+  <div class="cols">
+    <div>
+      <h2>Read a document</h2>
+
+      <!-- ═══════════════════════════════════════════════════════════════════
+           THE WHOLE INTEGRATION: this iframe, and the message listener below.
+
+           key         the API key the superadmin issued for this application
+           company_id  whose data this session sees, and whose corrections it
+                       learns from
+
+           Both sit in page source, so anyone who opens this page can read the
+           key and open a session for any company under it. That is the price
+           of having no backend; when you have one, mint a token there instead
+           and pass ?token=… (server.py in this folder shows that).
+           ═══════════════════════════════════════════════════════════════════ -->
+  <iframe
+        id="docai"
+        height="760"
+        src="http://localhost:8077/embed?key=dk_live_PFKaR6QTcX81r2CJ3hokbfMNYkEw8OGG&company_id=beo">
+      </iframe>
+    </div>
+
+    <div>
+      <h2>Invoice record</h2>
+      <div class="card">
+        <!-- This application's own form. Drawn empty; the panel fills it. -->
+        <div id="form"></div>
+        <div class="bar">
+          <button class="post" id="post" disabled>Save invoice</button>
+          <span class="said" id="said"></span>
+        </div>
+      </div>
+      <div class="log" id="log">waiting for the panel…</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Where the panel is served from. Messages from anywhere else are ignored.
+const DOCAI_ORIGIN = 'http://localhost:8077';
+
+const $ = id => document.getElementById(id);
+
+// This application's own invoice form. Fixed, because a real entry form is
+// fixed — and the target structure registered for this application is defined
+// to match these keys, which is what lets the panel's JSON drop straight in.
+const FORM = [
+  ['invoice_number',     'Invoice number'],
+  ['invoice_date',       'Invoice date'],
+  ['due_date',           'Due date'],
+  ['supplier_name',      'Supplier'],
+  ['supplier_vat_id',    'VAT ID'],
+  ['customer_reference', 'Our reference'],
+  ['net_amount',         'Net amount'],
+  ['tax_amount',         'Tax'],
+  ['total_amount',       'Total'],
+  ['currency',           'Currency'],
+  ['iban',               'Bank account (IBAN)']
+];
+
+const record = {};
+
+FORM.forEach(([key, text]) => {
+  const row = document.createElement('div');
+  row.className = 'row';
+  const label = document.createElement('label');
+  label.textContent = text;
+  label.setAttribute('for', 'f_' + key);
+  const input = document.createElement('input');
+  input.id = 'f_' + key;
+  input.placeholder = '—';
+  input.oninput = () => {
+    record[key] = input.value;
+    input.classList.toggle('filled', !!input.value);
+  };
+  row.append(label, input);
+  $('form').appendChild(row);
+});
+
+// ── the listener: put the panel's JSON into the form ──
+window.addEventListener('message', event => {
+  if (event.origin !== DOCAI_ORIGIN) return;          // ignore everything else
+  const msg = event.data;
+  if (!msg || typeof msg.type !== 'string') return;
+
+  switch (msg.type) {
+    case 'docai:ready':
+      say(`panel ready · ${msg.application} · company ${msg.company_id}`);
+      break;
+    case 'docai:result':                              // a document was read
+    case 'docai:corrected':                           // a user fixed a value
+    case 'docai:accepted':                            // "Use this data"
+      fill(msg.json, msg.type.replace('docai:', ''));
+      break;
+    case 'docai:save':
+      say(`correction saved for ${msg.company_id}`);
+      break;
+    case 'docai:resize':                              // keep the frame fitted
+      if (msg.height) $('docai').style.height = (msg.height + 4) + 'px';
+      break;
+    case 'docai:error':
+      say('panel error: ' + msg.message);
+      break;
+  }
+});
+
+function fill(json, why) {
+  if (!json) return;
+  let filled = 0;
+  FORM.forEach(([key]) => {
+    const input = $('f_' + key);
+    if (!input) return;
+    const value = json[key];
+    input.value = value === null || value === undefined ? '' : value;
+    input.classList.toggle('filled', !!input.value);
+    record[key] = input.value;
+    if (input.value) filled++;
+  });
+  $('post').disabled = false;
+  say(`${why} · ${filled}/${FORM.length} fields filled`);
+}
+
+$('post').onclick = () => {
+  // Your own save goes here. Nothing leaves this page in the sample.
+  $('said').textContent = 'Saved ' + (record.invoice_number || 'invoice') + '.';
+  say('saved: ' + JSON.stringify(record));
+};
+
+function say(line) {
+  const log = $('log');
+  const stamp = new Date().toLocaleTimeString();
+  const previous = log.textContent === 'waiting for the panel…' ? '' : log.textContent;
+  log.textContent = `${stamp}  ${line}\n` + previous;
+}
+</script>
+</body>
+</html>

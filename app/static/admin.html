@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Document AI — administration</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .tabs { display:flex; gap:2px; border-bottom:1px solid var(--rule); margin-bottom:20px; }
+  .tabs button { border:0; border-bottom:2px solid transparent; background:none; border-radius:0; color:var(--muted); padding:8px 14px; }
+  .tabs button[aria-selected="true"] { color:var(--ink); border-bottom-color:var(--accent); }
+  .applist { display:flex; flex-direction:column; gap:1px; background:var(--rule-soft); }
+  .applist button { text-align:left; border:0; border-radius:0; padding:10px 12px; width:100%; }
+  .applist button[aria-current="true"] { background:var(--accent-soft); color:var(--accent); }
+  .key { font-family:var(--mono); font-size:12px; background:var(--rule-soft); padding:4px 8px; border-radius:2px; word-break:break-all; display:inline-block; }
+  .snippet { font-family:var(--mono); font-size:11.5px; line-height:1.5; background:var(--surface); border:1px solid var(--rule); border-radius:var(--radius); padding:9px 11px; margin:4px 0 10px; overflow-x:auto; white-space:pre; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar" style="margin-bottom:22px">
+    <div>
+      <h1>Document AI</h1>
+      <p class="muted small" style="margin:2px 0 0">Administration · <span id="prov">EU processing</span></p>
+    </div>
+    <div class="spacer"></div>
+    <a href="/host" class="small">Open the example application</a>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" aria-selected="true" data-tab="apps">Applications</button>
+    <button role="tab" aria-selected="false" data-tab="runs">Activity</button>
+  </div>
+
+  <!-- APPLICATIONS -->
+  <section id="tab-apps">
+    <div class="grid2" style="grid-template-columns:260px 1fr">
+      <div class="card">
+        <div class="pad" style="border-bottom:1px solid var(--rule)">
+          <h3 id="appCount">Applications</h3>
+        </div>
+        <div class="applist" id="applist"></div>
+        <div class="pad"><button class="primary" id="newApp">Register an application</button></div>
+      </div>
+
+      <div class="card pad stack" id="editor">
+        <div>
+          <label for="name">Name</label>
+          <input id="name" placeholder="Finance — supplier invoices">
+        </div>
+        <div>
+          <label for="company">Company</label>
+          <input id="company" placeholder="acme-gmbh">
+          <p class="small muted" style="margin:5px 0 0">
+            The client this application belongs to. Every correction its users make is
+            filed under this id and shared across it, so the embed need not carry it.
+          </p>
+        </div>
+        <div>
+          <div class="bar" style="margin-bottom:5px">
+            <label for="schema" style="margin:0">Target structure this application receives</label>
+            <div class="spacer"></div>
+            <select id="template" style="width:auto">
+              <option value="">Start from a template…</option>
+              <option value="invoice">Incoming invoice</option>
+              <option value="delivery">Delivery note</option>
+              <option value="contract">Contract summary</option>
+            </select>
+          </div>
+          <textarea id="schema" rows="18" spellcheck="false"></textarea>
+        </div>
+        <div class="bar">
+          <button class="primary" id="save">Save application</button>
+          <span id="msg" class="small"></span>
+          <div class="spacer"></div>
+          <button id="remove" class="danger">Delete</button>
+        </div>
+        <div id="keyBox" class="notice hidden"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- RUNS -->
+  <section id="tab-runs" class="hidden">
+    <p class="muted">Counters only — enough to see the panel working, nothing that identifies a document.</p>
+    <div class="card"><table>
+      <thead><tr><th>When</th><th>Company</th><th>Mode</th><th>Layout</th><th>Regions applied</th><th>Read with</th></tr></thead>
+      <tbody id="runs"></tbody>
+    </table></div>
+  </section>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let apps = [], current = null;
+// True while the form is a blank new application. Without this, refreshing the
+// list re-selected the first application over the top of the empty form, so
+// "Register an application" quietly became "edit the first one" — and saving
+// overwrote it instead of creating anything.
+let creating = false;
+
+const TEMPLATES = {
+  invoice: {
+    type: "object", title: "Incoming invoice",
+    properties: {
+      invoice_number: { type: "string", description: "The invoice number issued by the supplier" },
+      invoice_date: { type: "string", description: "Invoice date in YYYY-MM-DD" },
+      supplier_name: { type: "string", description: "Legal name of the company that issued the invoice" },
+      total_amount: { type: "number", description: "Gross total to be paid" },
+      currency: { type: "string", description: "ISO 4217 currency code" }
+    },
+    required: ["invoice_number", "total_amount"]
+  },
+  delivery: {
+    type: "object", title: "Delivery note",
+    properties: {
+      delivery_note_number: { type: "string", description: "Number of the delivery note" },
+      delivery_date: { type: "string", description: "Date of delivery in YYYY-MM-DD" },
+      shipper_name: { type: "string", description: "Company that shipped the goods" },
+      package_count: { type: "number", description: "Number of packages delivered" }
+    },
+    required: ["delivery_note_number"]
+  },
+  contract: {
+    type: "object", title: "Contract summary",
+    properties: {
+      counterparty: { type: "string", description: "The other party to the contract" },
+      start_date: { type: "string", description: "Date the contract starts, YYYY-MM-DD" },
+      term_months: { type: "number", description: "Length of the initial term in months" },
+      notice_period_days: { type: "number", description: "Notice period for termination, in days" },
+      governing_law: { type: "string", description: "Jurisdiction whose law governs the contract" }
+    },
+    required: ["counterparty"]
+  }
+};
+
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-selected', x === b));
+  ['apps', 'runs'].forEach(t => $('tab-' + t).classList.toggle('hidden', t !== b.dataset.tab));
+  if (b.dataset.tab === 'runs') loadRuns();
+});
+
+$('template').onchange = e => {
+  if (!e.target.value) return;
+  $('schema').value = JSON.stringify(TEMPLATES[e.target.value], null, 2);
+  e.target.value = '';
+};
+
+async function load() {
+  apps = await (await fetch('/api/admin/applications')).json();
+  $('appCount').textContent = `Applications (${apps.length})`;
+  const list = $('applist');
+  list.innerHTML = '';
+  apps.forEach(a => {
+    const b = document.createElement('button');
+    b.innerHTML = `<div>${a.name}</div>` +
+      `<div class="small muted" style="margin-top:2px">${a.company_id || 'no company set'}</div>`;
+    b.setAttribute('aria-current', current && current.id === a.id);
+    b.onclick = () => select(a);
+    list.appendChild(b);
+  });
+  if (!creating && !current && apps.length) select(apps[0]);
+}
+
+function select(a) {
+  current = a;
+  creating = false;
+  $('remove').classList.remove('hidden');
+  $('name').value = a.name;
+  $('company').value = a.company_id || '';
+  $('schema').value = JSON.stringify(a.target_schema, null, 2);
+  showKey(a);
+  load();
+}
+
+// What the client does with the key. Spelling it out here is the difference
+// between handing someone a secret and handing them an integration.
+function showKey(a) {
+  const box = $('keyBox');
+  box.className = 'notice';
+  const base = location.origin;
+  if (a.api_key) {
+    box.innerHTML =
+      `<div>API key for <strong>${a.name}</strong> — copy it now, it is not shown again:</div>` +
+      `<div class="key" style="margin:6px 0 10px">${a.api_key}</div>` +
+      `<div class="small muted">Simplest — one iframe, nothing on their server. The key is in page source, so anyone reading the page has it:</div>` +
+      `<pre class="snippet">&lt;iframe src="${base}/embed?key=${a.api_key}"&gt;&lt;/iframe&gt;</pre>` +
+      `<div class="small muted">Better, where they have a server: it swaps the key for a short-lived token, and the key never reaches a browser:</div>` +
+      `<pre class="snippet">POST ${base}/api/session
+X-API-Key: ${a.api_key}
+
+→ { "token": "…", "embed_url": "${base}/embed?token=…" }</pre>` +
+      `<div class="small muted">Either way the page listens for the data:</div>` +
+      `<pre class="snippet">window.addEventListener('message', e =&gt; {
+  if (e.origin !== '${base}') return;
+  if (e.data.type === 'docai:result') fillForm(e.data.json);
+});</pre>`;
+  } else {
+    box.innerHTML =
+      `<div class="small muted">The API key was shown once when this application was ` +
+      `registered and is not stored in a readable form here.</div>` +
+      `<div style="margin-top:8px"><button class="quiet small" id="reissue">Reissue the API key</button> ` +
+      `<span class="small muted">replaces it — their current key stops working immediately</span></div>`;
+    $('reissue').onclick = async () => {
+      if (!confirm(`Reissue the API key for ${a.name}?\n\nTheir existing key stops working at once and the application must be updated with the new one.`)) return;
+      const res = await fetch('/api/admin/applications/' + a.id + '/key', { method: 'POST' });
+      const fresh = await res.json();
+      if (!res.ok) return note(fresh.error || 'Could not reissue the key.', true);
+      current = fresh;
+      showKey(fresh);
+      note('New key issued.');
+    };
+  }
+}
+
+$('newApp').onclick = () => {
+  current = null;
+  creating = true;
+  // Nothing to delete yet.
+  $('remove').classList.add('hidden');
+  $('name').value = '';
+  $('company').value = '';
+  $('schema').value = JSON.stringify(TEMPLATES.invoice, null, 2);
+  $('keyBox').classList.add('hidden');
+  $('name').focus();
+  load();
+};
+
+$('save').onclick = async () => {
+  let schema;
+  try { schema = JSON.parse($('schema').value); }
+  catch (e) { return note('That is not valid JSON: ' + e.message, true); }
+  // Update only what is actually open for editing; anything else creates.
+  const editing = !creating && current;
+  // The embedding origin is not on this form. Carry the application's stored
+  // value through so saving a name or a schema never quietly reopens a panel
+  // that had been locked to one customer's page.
+  const body = {
+    name: $('name').value,
+    company_id: $('company').value,
+    target_schema: schema,
+    iframe_origin: editing ? (current.iframe_origin || '*') : '*',
+  };
+  const res = await fetch(editing ? '/api/admin/applications/' + current.id : '/api/admin/applications', {
+    method: editing ? 'PUT' : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  if (!res.ok) return note(data.error || 'Could not save.', true);
+  note(editing ? 'Saved.' : 'Registered. Copy the API key below — it is shown once.');
+  creating = false;
+  current = data;
+  select(data);
+};
+
+$('remove').onclick = async () => {
+  if (!current) return;
+  const label = current.company_id ? `${current.name} (${current.company_id})` : current.name;
+  if (!confirm(`Delete ${label}?\n\nIts API key stops working at once, and everything it `
+            + `has learned is deleted with it. This cannot be undone.`)) return;
+  const res = await fetch('/api/admin/applications/' + current.id, { method: 'DELETE' });
+  const data = await res.json();
+  if (!res.ok) return note(data.error || 'Could not delete it.', true);
+  current = null;
+  $('keyBox').classList.add('hidden');
+  $('name').value = '';
+  $('company').value = '';
+  $('schema').value = '';
+  await load();                       // re-selects whatever is left
+  note(`Deleted ${data.name}` + (data.hints_deleted
+    ? ` and ${data.hints_deleted} correction${data.hints_deleted > 1 ? 's' : ''} it had learned.`
+    : '.'));
+};
+
+function note(text, bad) {
+  $('msg').textContent = text;
+  $('msg').style.color = bad ? 'var(--flag)' : 'var(--confirm)';
+  setTimeout(() => $('msg').textContent = '', 4000);
+}
+
+async function loadRuns() {
+  const rows = await (await fetch('/api/admin/runs')).json();
+  $('runs').innerHTML = rows.length ? '' : '<tr><td colspan="6" class="muted">No documents read yet.</td></tr>';
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="small">${new Date(r.created_at * 1000).toLocaleString()}</td>
+      <td class="mono">${r.company_id}</td><td>${r.mode}</td>
+      <td class="mono small">${r.fingerprint}</td><td>${r.hints_used}</td><td>${r.provider}</td>`;
+    $('runs').appendChild(tr);
+  });
+}
+
+load();
+</script>
+</body>
+</html>

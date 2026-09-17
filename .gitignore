@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Real credentials. .env.example is the one that gets shared.
+.env
+example_host/.env
+
+# Local state: registered applications, learned regions, run counters.
+docai.sqlite3
