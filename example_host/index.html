@@ -4,56 +4,226 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Example application — Document AI panel embedded</title>
+
 <style>
   :root {
-    --ink: #1b2430; --muted: #64748b; --line: #dde3ea;
-    --bg: #f6f7f9; --card: #ffffff; --brand: #6d4aff; --ok: #0f7a52;
+    --ink: #1b2430;
+    --muted: #64748b;
+    --line: #dde3ea;
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --brand: #6d4aff;
+    --ok: #0f7a52;
   }
-  * { box-sizing: border-box; }
+
+  * {
+    box-sizing: border-box;
+  }
+
   body {
-    margin: 0; background: var(--bg); color: var(--ink);
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
     font: 15px/1.55 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
   }
+
   header {
-    background: var(--ink); color: #eef2f7; padding: 12px 26px;
-    display: flex; align-items: center; gap: 12px;
+    background: var(--ink);
+    color: #eef2f7;
+    padding: 12px 26px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
   }
-  header b { color: #fff; letter-spacing: -0.01em; }
-  .wrap { max-width: 1180px; margin: 0 auto; padding: 26px; }
-  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
-  .lede { color: var(--muted); margin: 0 0 22px; max-width: 64ch; }
-  .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
-  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin: 0 0 8px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
-  #docai { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; display: block; }
-  .row { display: grid; grid-template-columns: 150px 1fr; gap: 12px; align-items: center; padding: 9px 14px; border-bottom: 1px solid #eef1f5; }
-  .row:last-child { border-bottom: 0; }
-  .row label { font-size: 13px; color: var(--muted); }
+
+  header b {
+    color: #fff;
+    letter-spacing: -0.01em;
+  }
+
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 26px;
+  }
+
+  h1 {
+    font-size: 22px;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+
+  .lede {
+    color: var(--muted);
+    margin: 0 0 22px;
+    max-width: 64ch;
+  }
+
+  .cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 24px;
+    align-items: start;
+  }
+
+  @media (max-width: 900px) {
+    .cols {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted);
+    margin: 0 0 8px;
+  }
+
+  h3 {
+    font-size: 14px;
+    margin: 18px 14px 8px;
+    color: var(--ink);
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  #docai {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    display: block;
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: 170px 1fr;
+    gap: 12px;
+    align-items: center;
+    padding: 9px 14px;
+    border-bottom: 1px solid #eef1f5;
+  }
+
+  .row:last-child {
+    border-bottom: 0;
+  }
+
+  .row label {
+    font-size: 13px;
+    color: var(--muted);
+  }
+
   .row input {
-    font: inherit; font-size: 14px; padding: 7px 10px; width: 100%;
-    border: 1px solid var(--line); border-radius: 5px; background: #fbfcfd;
+    font: inherit;
+    font-size: 14px;
+    padding: 7px 10px;
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    background: #fbfcfd;
   }
-  .row input.filled { background: #f0fbf5; border-color: #b9e2cd; }
-  .bar { display: flex; gap: 10px; align-items: center; padding: 14px; border-top: 1px solid var(--line); }
+
+  .row input.filled {
+    background: #f0fbf5;
+    border-color: #b9e2cd;
+  }
+
+  /* Invoice items */
+  .items-wrapper {
+    padding: 0 14px 14px;
+    overflow-x: auto;
+  }
+
+  .items-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  .items-table th,
+  .items-table td {
+    border: 1px solid var(--line);
+    padding: 7px;
+    text-align: left;
+  }
+
+  .items-table th {
+    background: #f6f7f9;
+    color: var(--muted);
+    font-weight: 600;
+  }
+
+  .items-table input {
+    width: 100%;
+    min-width: 70px;
+    padding: 6px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font: inherit;
+  }
+
+  .bar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 14px;
+    border-top: 1px solid var(--line);
+  }
+
   button.post {
-    font: inherit; font-weight: 600; color: #fff; background: var(--brand);
-    border: 0; border-radius: 6px; padding: 9px 16px; cursor: pointer;
+    font: inherit;
+    font-weight: 600;
+    color: #fff;
+    background: var(--brand);
+    border: 0;
+    border-radius: 6px;
+    padding: 9px 16px;
+    cursor: pointer;
   }
-  button.post:disabled { opacity: .45; cursor: not-allowed; }
-  .said { font-size: 13px; color: var(--ok); }
-  .log { font: 12px/1.6 ui-monospace, Menlo, monospace; background: #111823; color: #cfe0f0; border-radius: 8px; padding: 12px 14px; margin-top: 14px; white-space: pre-wrap; max-height: 200px; overflow: auto; }
+
+  button.post:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+  }
+
+  .said {
+    font-size: 13px;
+    color: var(--ok);
+  }
+
+  .log {
+    font: 12px/1.6 ui-monospace, Menlo, monospace;
+    background: #111823;
+    color: #cfe0f0;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-top: 14px;
+    white-space: pre-wrap;
+    max-height: 200px;
+    overflow: auto;
+  }
 </style>
 </head>
+
 <body>
 
 <header>
   <b>Example application</b>
-  <span style="font-size:13px;color:#9fb0c0">stands in for your software</span>
+  <span style="font-size:13px;color:#9fb0c0">
+    stands in for your software
+  </span>
 </header>
 
 <div class="wrap">
+
   <h1>Read a document into this form</h1>
+
   <p class="lede">
     A plain HTML page. The panel is the iframe below, with the API key and the
     company written straight into the markup — there is no backend here at all.
@@ -62,140 +232,682 @@
   </p>
 
   <div class="cols">
+
+    <!-- ============================================================= -->
+    <!-- DOCUMENT AI PANEL -->
+    <!-- ============================================================= -->
+
     <div>
+
       <h2>Read a document</h2>
 
-      <!-- ═══════════════════════════════════════════════════════════════════
-           THE WHOLE INTEGRATION: this iframe, and the message listener below.
-
-           key         the API key the superadmin issued for this application
-           company_id  whose data this session sees, and whose corrections it
-                       learns from
-
-           Both sit in page source, so anyone who opens this page can read the
-           key and open a session for any company under it. That is the price
-           of having no backend; when you have one, mint a token there instead
-           and pass ?token=… (server.py in this folder shows that).
-           ═══════════════════════════════════════════════════════════════════ -->
-  <iframe
+      <iframe
         id="docai"
         height="760"
-        src="http://localhost:8077/embed?key=dk_live_PFKaR6QTcX81r2CJ3hokbfMNYkEw8OGG&company_id=beo">
+        src="http://localhost:8077/embed?key=dk_live__mVnAd5wRAQouAU7tdcQzBAdZDzggNOa">
       </iframe>
+
     </div>
+
+
+    <!-- ============================================================= -->
+    <!-- INVOICE FORM -->
+    <!-- ============================================================= -->
 
     <div>
+
       <h2>Invoice record</h2>
+
       <div class="card">
-        <!-- This application's own form. Drawn empty; the panel fills it. -->
-        <div id="form"></div>
-        <div class="bar">
-          <button class="post" id="post" disabled>Save invoice</button>
-          <span class="said" id="said"></span>
+
+        <div id="form">
+
+          <!-- ===================================================== -->
+          <!-- INVOICE INFORMATION -->
+          <!-- ===================================================== -->
+
+          <h3>Invoice Information</h3>
+
+          <div class="row">
+            <label for="f_invoice_number">
+              Invoice number
+            </label>
+            <input id="f_invoice_number" placeholder="—">
+          </div>
+
+          <div class="row">
+            <label for="f_invoice_date">
+              Invoice date
+            </label>
+            <input id="f_invoice_date" placeholder="YYYY-MM-DD">
+          </div>
+
+          <div class="row">
+            <label for="f_customer_number">
+              Customer number
+            </label>
+            <input id="f_customer_number" placeholder="—">
+          </div>
+
+          <div class="row">
+            <label for="f_customer_name">
+              Customer name
+            </label>
+            <input id="f_customer_name" placeholder="—">
+          </div>
+
+          <div class="row">
+            <label for="f_customer_address">
+              Customer address
+            </label>
+            <input id="f_customer_address" placeholder="—">
+          </div>
+
+          <div class="row">
+            <label for="f_order_number">
+              Order number
+            </label>
+            <input id="f_order_number" placeholder="—">
+          </div>
+
+          <div class="row">
+            <label for="f_delivery_note_number">
+              Delivery note number
+            </label>
+            <input id="f_delivery_note_number" placeholder="—">
+          </div>
+
+          <div class="row">
+            <label for="f_delivery_date">
+              Delivery date
+            </label>
+            <input id="f_delivery_date" placeholder="YYYY-MM-DD">
+          </div>
+
+          <div class="row">
+            <label for="f_shipping_method">
+              Shipping method
+            </label>
+            <input id="f_shipping_method" placeholder="—">
+          </div>
+
+          <div class="row">
+            <label for="f_shipper_name">
+              Shipper / Supplier
+            </label>
+            <input id="f_shipper_name" placeholder="—">
+          </div>
+
+
+          <!-- ===================================================== -->
+          <!-- INVOICE ITEMS -->
+          <!-- ===================================================== -->
+
+          <h3>Invoice Items</h3>
+
+          <div class="items-wrapper">
+            <table class="items-table">
+
+              <thead>
+                <tr>
+                  <th>Position</th>
+                  <th>Item number</th>
+                  <th>Description</th>
+                  <th>Quantity</th>
+                  <th>Unit</th>
+                  <th>Unit price</th>
+                  <th>Line total</th>
+                </tr>
+              </thead>
+
+              <tbody id="items-body"></tbody>
+
+            </table>
+          </div>
+
+
+          <!-- ===================================================== -->
+          <!-- AMOUNTS -->
+          <!-- ===================================================== -->
+
+          <h3>Amounts</h3>
+
+          <div class="row">
+            <label for="f_net_amount">
+              Net amount
+            </label>
+            <input id="f_net_amount" placeholder="—">
+          </div>
+
+          <div class="row">
+            <label for="f_shipping_cost">
+              Shipping cost
+            </label>
+            <input id="f_shipping_cost" placeholder="—">
+          </div>
+
+          <div class="row">
+            <label for="f_tax_rate">
+              VAT rate
+            </label>
+            <input id="f_tax_rate" placeholder="—">
+          </div>
+
+          <div class="row">
+            <label for="f_tax_amount">
+              Tax amount
+            </label>
+            <input id="f_tax_amount" placeholder="—">
+          </div>
+
+          <div class="row">
+            <label for="f_total_amount">
+              Total amount
+            </label>
+            <input id="f_total_amount" placeholder="—">
+          </div>
+
+
+          <!-- ===================================================== -->
+          <!-- PAYMENT -->
+          <!-- ===================================================== -->
+
+          <h3>Payment</h3>
+
+          <div class="row">
+            <label for="f_payment_status">
+              Payment status
+            </label>
+            <input id="f_payment_status" placeholder="—">
+          </div>
+
+          <div class="row">
+            <label for="f_payment_method">
+              Payment method
+            </label>
+            <input id="f_payment_method" placeholder="—">
+          </div>
+
         </div>
+
+
+        <!-- ======================================================= -->
+        <!-- SAVE -->
+        <!-- ======================================================= -->
+
+        <div class="bar">
+
+          <button
+            class="post"
+            id="post"
+            disabled>
+            Save invoice
+          </button>
+
+          <span
+            class="said"
+            id="said">
+          </span>
+
+        </div>
+
       </div>
-      <div class="log" id="log">waiting for the panel…</div>
+
+      <div
+        class="log"
+        id="log">
+        waiting for the panel…
+      </div>
+
     </div>
+
   </div>
+
 </div>
 
+
 <script>
-// Where the panel is served from. Messages from anywhere else are ignored.
+
+// ================================================================
+// DOCUMENT AI CONFIGURATION
+// ================================================================
+
 const DOCAI_ORIGIN = 'http://localhost:8077';
 
 const $ = id => document.getElementById(id);
 
-// This application's own invoice form. Fixed, because a real entry form is
-// fixed — and the target structure registered for this application is defined
-// to match these keys, which is what lets the panel's JSON drop straight in.
+
+// ================================================================
+// INVOICE FORM FIELDS
+// ================================================================
+
 const FORM = [
-  ['invoice_number',     'Invoice number'],
-  ['invoice_date',       'Invoice date'],
-  ['due_date',           'Due date'],
-  ['supplier_name',      'Supplier'],
-  ['supplier_vat_id',    'VAT ID'],
-  ['customer_reference', 'Our reference'],
-  ['net_amount',         'Net amount'],
-  ['tax_amount',         'Tax'],
-  ['total_amount',       'Total'],
-  ['currency',           'Currency'],
-  ['iban',               'Bank account (IBAN)']
+
+  ['invoice_number', 'Invoice number'],
+
+  ['invoice_date', 'Invoice date'],
+
+  ['customer_number', 'Customer number'],
+
+  ['customer_name', 'Customer name'],
+
+  ['customer_address', 'Customer address'],
+
+  ['order_number', 'Order number'],
+
+  ['delivery_note_number', 'Delivery note number'],
+
+  ['delivery_date', 'Delivery date'],
+
+  ['shipping_method', 'Shipping method'],
+
+  ['shipper_name', 'Shipper / Supplier'],
+
+  ['net_amount', 'Net amount'],
+
+  ['shipping_cost', 'Shipping cost'],
+
+  ['tax_rate', 'VAT rate'],
+
+  ['tax_amount', 'Tax amount'],
+
+  ['total_amount', 'Total amount'],
+
+  ['payment_status', 'Payment status'],
+
+  ['payment_method', 'Payment method']
+
 ];
 
-const record = {};
 
-FORM.forEach(([key, text]) => {
-  const row = document.createElement('div');
-  row.className = 'row';
-  const label = document.createElement('label');
-  label.textContent = text;
-  label.setAttribute('for', 'f_' + key);
-  const input = document.createElement('input');
-  input.id = 'f_' + key;
-  input.placeholder = '—';
-  input.oninput = () => {
-    record[key] = input.value;
-    input.classList.toggle('filled', !!input.value);
-  };
-  row.append(label, input);
-  $('form').appendChild(row);
-});
+// ================================================================
+// RECORD
+// ================================================================
 
-// ── the listener: put the panel's JSON into the form ──
-window.addEventListener('message', event => {
-  if (event.origin !== DOCAI_ORIGIN) return;          // ignore everything else
-  const msg = event.data;
-  if (!msg || typeof msg.type !== 'string') return;
-
-  switch (msg.type) {
-    case 'docai:ready':
-      say(`panel ready · ${msg.application} · company ${msg.company_id}`);
-      break;
-    case 'docai:result':                              // a document was read
-    case 'docai:corrected':                           // a user fixed a value
-    case 'docai:accepted':                            // "Use this data"
-      fill(msg.json, msg.type.replace('docai:', ''));
-      break;
-    case 'docai:save':
-      say(`correction saved for ${msg.company_id}`);
-      break;
-    case 'docai:resize':                              // keep the frame fitted
-      if (msg.height) $('docai').style.height = (msg.height + 4) + 'px';
-      break;
-    case 'docai:error':
-      say('panel error: ' + msg.message);
-      break;
-  }
-});
-
-function fill(json, why) {
-  if (!json) return;
-  let filled = 0;
-  FORM.forEach(([key]) => {
-    const input = $('f_' + key);
-    if (!input) return;
-    const value = json[key];
-    input.value = value === null || value === undefined ? '' : value;
-    input.classList.toggle('filled', !!input.value);
-    record[key] = input.value;
-    if (input.value) filled++;
-  });
-  $('post').disabled = false;
-  say(`${why} · ${filled}/${FORM.length} fields filled`);
-}
-
-$('post').onclick = () => {
-  // Your own save goes here. Nothing leaves this page in the sample.
-  $('said').textContent = 'Saved ' + (record.invoice_number || 'invoice') + '.';
-  say('saved: ' + JSON.stringify(record));
+const record = {
+  items: []
 };
 
-function say(line) {
-  const log = $('log');
-  const stamp = new Date().toLocaleTimeString();
-  const previous = log.textContent === 'waiting for the panel…' ? '' : log.textContent;
-  log.textContent = `${stamp}  ${line}\n` + previous;
+
+// ================================================================
+// MANUAL INPUT LISTENERS
+// ================================================================
+
+FORM.forEach(([key, text]) => {
+
+  const input = $('f_' + key);
+
+  if (!input) return;
+
+  input.oninput = () => {
+
+    record[key] = input.value;
+
+    input.classList.toggle(
+      'filled',
+      !!input.value
+    );
+
+  };
+
+});
+
+
+// ================================================================
+// MESSAGE LISTENER
+// ================================================================
+
+window.addEventListener('message', event => {
+
+  if (event.origin !== DOCAI_ORIGIN) {
+    return;
+  }
+
+  const msg = event.data;
+
+  if (!msg || typeof msg.type !== 'string') {
+    return;
+  }
+
+  switch (msg.type) {
+
+    case 'docai:ready':
+
+      say(
+        `panel ready · ${msg.application} · company ${msg.company_id}`
+      );
+
+      break;
+
+
+    case 'docai:result':
+
+    case 'docai:corrected':
+
+    case 'docai:accepted':
+
+      fill(
+        msg.json,
+        msg.type.replace('docai:', '')
+      );
+
+      break;
+
+
+    case 'docai:save':
+
+      say(
+        `correction saved for ${msg.company_id}`
+      );
+
+      break;
+
+
+    case 'docai:resize':
+
+      if (msg.height) {
+
+        $('docai').style.height =
+          (msg.height + 4) + 'px';
+
+      }
+
+      break;
+
+
+    case 'docai:error':
+
+      say(
+        'panel error: ' + msg.message
+      );
+
+      break;
+
+  }
+
+});
+
+
+// ================================================================
+// FILL FORM FROM DOCUMENT AI JSON
+// ================================================================
+
+function fill(json, why) {
+
+  if (!json) {
+    return;
+  }
+
+  let filled = 0;
+
+
+  // --------------------------------------------------------------
+  // Normal fields
+  // --------------------------------------------------------------
+
+  FORM.forEach(([key]) => {
+
+    const input = $('f_' + key);
+
+    if (!input) {
+      return;
+    }
+
+    const value = json[key];
+
+    input.value =
+      value === null || value === undefined
+        ? ''
+        : value;
+
+    input.classList.toggle(
+      'filled',
+      !!input.value
+    );
+
+    record[key] = input.value;
+
+    if (input.value) {
+      filled++;
+    }
+
+  });
+
+
+  // --------------------------------------------------------------
+  // Invoice items
+  // --------------------------------------------------------------
+
+  record.items = Array.isArray(json.items)
+    ? json.items
+    : [];
+
+  renderItems(record.items);
+
+
+  // --------------------------------------------------------------
+  // Enable save
+  // --------------------------------------------------------------
+
+  $('post').disabled = false;
+
+
+  say(
+    `${why} · ${filled}/${FORM.length} fields filled · ` +
+    `${record.items.length} item(s)`
+  );
+
 }
+
+
+// ================================================================
+// RENDER INVOICE ITEMS
+// ================================================================
+
+function renderItems(items) {
+
+  const tbody = $('items-body');
+
+  tbody.innerHTML = '';
+
+
+  items.forEach((item, index) => {
+
+    const tr = document.createElement('tr');
+
+
+    // Position
+    tr.innerHTML += `
+      <td>
+        <input
+          type="number"
+          value="${escapeHtml(item.position ?? '')}"
+          data-index="${index}"
+          data-field="position">
+      </td>
+    `;
+
+
+    // Item number
+    tr.innerHTML += `
+      <td>
+        <input
+          type="text"
+          value="${escapeHtml(item.item_number ?? '')}"
+          data-index="${index}"
+          data-field="item_number">
+      </td>
+    `;
+
+
+    // Description
+    tr.innerHTML += `
+      <td>
+        <input
+          type="text"
+          value="${escapeHtml(item.description ?? '')}"
+          data-index="${index}"
+          data-field="description">
+      </td>
+    `;
+
+
+    // Quantity
+    tr.innerHTML += `
+      <td>
+        <input
+          type="number"
+          step="any"
+          value="${escapeHtml(item.quantity ?? '')}"
+          data-index="${index}"
+          data-field="quantity">
+      </td>
+    `;
+
+
+    // Unit
+    tr.innerHTML += `
+      <td>
+        <input
+          type="text"
+          value="${escapeHtml(item.unit ?? '')}"
+          data-index="${index}"
+          data-field="unit">
+      </td>
+    `;
+
+
+    // Unit price
+    tr.innerHTML += `
+      <td>
+        <input
+          type="number"
+          step="any"
+          value="${escapeHtml(item.unit_price ?? '')}"
+          data-index="${index}"
+          data-field="unit_price">
+      </td>
+    `;
+
+
+    // Line total
+    tr.innerHTML += `
+      <td>
+        <input
+          type="number"
+          step="any"
+          value="${escapeHtml(item.line_total ?? '')}"
+          data-index="${index}"
+          data-field="line_total">
+      </td>
+    `;
+
+
+    tbody.appendChild(tr);
+
+  });
+
+
+  // Add change listeners to item fields
+
+  tbody.querySelectorAll('input').forEach(input => {
+
+    input.addEventListener('input', event => {
+
+      const index =
+        Number(event.target.dataset.index);
+
+      const field =
+        event.target.dataset.field;
+
+      let value = event.target.value;
+
+
+      if (
+        field === 'position' ||
+        field === 'quantity' ||
+        field === 'unit_price' ||
+        field === 'line_total'
+      ) {
+
+        value =
+          value === ''
+            ? ''
+            : Number(value);
+
+      }
+
+
+      record.items[index][field] = value;
+
+    });
+
+  });
+
+}
+
+
+// ================================================================
+// ESCAPE HTML
+// ================================================================
+
+function escapeHtml(value) {
+
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+
+}
+
+
+// ================================================================
+// SAVE INVOICE
+// ================================================================
+
+$('post').onclick = () => {
+
+  // Your own save goes here.
+  // Nothing leaves this page in the sample.
+
+  $('said').textContent =
+    'Saved ' +
+    (record.invoice_number || 'invoice') +
+    '.';
+
+  say(
+    'saved: ' +
+    JSON.stringify(record, null, 2)
+  );
+
+};
+
+
+// ================================================================
+// LOG
+// ================================================================
+
+function say(line) {
+
+  const log = $('log');
+
+  const stamp =
+    new Date().toLocaleTimeString();
+
+  const previous =
+    log.textContent === 'waiting for the panel…'
+      ? ''
+      : log.textContent;
+
+  log.textContent =
+    `${stamp}  ${line}\n` +
+    previous;
+
+}
+
 </script>
+
 </body>
 </html>
