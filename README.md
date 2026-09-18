@@ -141,9 +141,62 @@ origin, with no dependencies:
 python example_host/server.py          # http://localhost:8090
 ```
 
-Two files. `server.py` swaps its API key for a token server-side, and
-`index.html` mounts the iframe and fills a form from what comes back. Point it
-elsewhere with `DOCAI_URL`, `DOCAI_KEY` and `COMPANY_ID`.
+`index.html` is a plain page: the panel is an `<iframe>` in the markup with the
+API key in its `src`, and a `message` listener fills a fixed form from what
+comes back. No build step, no framework, and nothing on its own server — the
+`server.py` beside it only hands the file over, so any static host would do.
+
+```html
+<iframe src="http://localhost:8077/embed?key=YOUR_API_KEY"></iframe>
+```
+
+```js
+window.addEventListener('message', e => {
+  if (e.origin !== 'http://localhost:8077') return;
+  if (e.data.type === 'docai:result') fillForm(e.data.json);
+});
+```
+
+The company comes from the application's registration, so it need not be in the
+URL. A key in page source can be read by anyone who opens the page and used to
+open a session for any company under that application — for a pilot, mint a
+token on your server instead and pass `?token=…`; `server.py` still shows that
+arrangement.
+
+---
+
+## Running it on another machine
+
+Three things deliberately do not travel with the repository, and each one
+produces a different symptom if it is missing.
+
+**The Mistral key.** Not in the repo. Without it the service falls back to the
+offline reader: digital PDFs still work but much less well, and a scan is
+refused with a 415. Export `MISTRAL_API_KEY` before starting the service.
+
+**The database.** `docai.sqlite3` is ignored, so a fresh machine starts with the
+two seeded demo applications and nothing else. The API key written into
+`example_host/index.html` belongs to an application that does not exist there,
+and the panel will say *"That API key was not accepted."* Register an
+application in `/admin`, copy the key it shows once, and paste it into the
+iframe `src`.
+
+**Learned corrections.** They live in that same database, so a new machine
+starts knowing nothing. That is the intended behaviour, not a fault.
+
+In full:
+
+```bash
+pip install -r requirements.txt
+python make_samples.py
+
+export MISTRAL_API_KEY=...                  # else offline, and no scans
+uvicorn app.main:app --reload --port 8077   # terminal 1
+python example_host/server.py               # terminal 2 — http://localhost:8090
+```
+
+Then open `/admin` (the password is printed on startup), register an
+application, and put its key in `example_host/index.html`.
 
 The form is built from the JSON the panel returns, not from a list of field
 names written into the page. Give the same page an application registered for
