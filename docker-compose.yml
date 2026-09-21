@@ -1,0 +1,49 @@
+# Two containers from one image: the service, and the sample application that
+# embeds its panel.
+#
+#   MISTRAL_API_KEY=sk-... docker compose up --build
+#
+# then open http://localhost:8090 (the sample app) or http://localhost:8077/admin
+# (superadmin, user1 / 1234).
+#
+# Without a key it still runs, on the offline reader: digital PDFs work less
+# well and scans are refused, because OCR needs Mistral.
+
+services:
+  service:
+    build: .
+    image: docai
+    ports:
+      - "8077:8077"
+    environment:
+      # Passed through from your shell or a .env file beside this one. Never
+      # baked into the image.
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      MISTRAL_MODEL: ${MISTRAL_MODEL:-mistral-large-latest}
+      MISTRAL_OCR_MODEL: ${MISTRAL_OCR_MODEL:-mistral-ocr-latest}
+      # Change both of these before this is reachable by anyone else.
+      DOCAI_ADMIN_USER: ${DOCAI_ADMIN_USER:-user1}
+      DOCAI_ADMIN_PASSWORD: ${DOCAI_ADMIN_PASSWORD:-}
+      DOCAI_SECRET: ${DOCAI_SECRET:-change-me-before-any-shared-deployment}
+    volumes:
+      # Registered applications and everything learned survive a rebuild.
+      - docai-data:/data
+    restart: unless-stopped
+
+  example-host:
+    build: .
+    image: docai
+    # Same image, different role: serve example_host/index.html.
+    command: ["python", "example_host/server.py"]
+    ports:
+      - "8090:8090"
+    environment:
+      PORT: "8090"
+      # A container's localhost is its own, so listen on all interfaces.
+      BIND: "0.0.0.0"
+    depends_on:
+      - service
+    restart: unless-stopped
+
+volumes:
+  docai-data:

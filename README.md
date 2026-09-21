@@ -11,13 +11,32 @@ and nothing fetched from a CDN at runtime.
 
 ## Run it
 
+### With Docker
+
 ```bash
-pip install -r requirements.txt
-python make_samples.py                  # five demo invoices
-uvicorn app.main:app --reload --port 8000
+echo "MISTRAL_API_KEY=your-key" > .env
+docker compose up --build
 ```
 
-Open <http://localhost:8000>. It works with no API key — see *Providers* below.
+- the sample application — <http://localhost:8090>
+- superadmin — <http://localhost:8077/admin>
+
+Two containers from one image: the service and the sample host application.
+`compose` reads `.env` beside it, so no key is typed on the command line and
+none is baked into the image. The database lives on a named volume, so
+registered clients and everything they have taught it survive a rebuild.
+
+It runs with no key at all — see *Providers* — but scans need one.
+
+### Without Docker
+
+```bash
+pip install -r requirements.txt
+python make_samples.py                     # seven demo invoices
+export MISTRAL_API_KEY=...                 # optional; scans need it
+uvicorn app.main:app --reload --port 8077  # terminal 1
+python example_host/server.py              # terminal 2
+```
 
 The superadmin area is behind a password. The demo default is deliberately
 trivial, printed to the log on start:
@@ -29,6 +48,19 @@ superadmin /admin — user1 / 1234   (set DOCAI_ADMIN_PASSWORD to choose your ow
 `DOCAI_ADMIN_PASSWORD` overrides it and `DOCAI_ADMIN_USER` the name. The
 default is a door that is shut, not one that is locked — set a real password
 before the service is reachable by anyone but you.
+
+### Registering a client
+
+Three fields: a **name**, the **company** the client belongs to, and the
+**target JSON structure** its application receives. Saving mints an API key,
+shown once — the panel then displays the one-line iframe to hand over, and the
+token handshake for when the client has a server.
+
+Because the company is on the registration, an embed carries only the key; every
+correction its users make is filed under that company and shared across it.
+
+Lost a key? **Reissue the API key** replaces it — the old one stops working at
+once. **Delete** removes the application, its key and everything it learned.
 
 Nothing is loaded from a CDN — no fonts, no scripts. The panel makes no
 third-party request, so it works on a closed network and sends no end user's IP
@@ -56,20 +88,42 @@ company_id · application · layout fingerprint · field path
              · short snippet
 ```
 
-The next document with the same fingerprint is read at that rectangle, or after
-that anchor, and the result goes to the model as strong evidence. Accuracy
-climbs per company with nothing fine-tuned and no document retained.
+The next document of that kind is read at that rectangle, or beside that label,
+and **the value found there replaces the model's answer for that field**. This
+is the part that makes a correction a correction: handing it to the model as
+evidence is not enough, because the model has its own confident reading and
+often keeps it — so the field would revert on the next upload and the user
+would mark it again.
 
-Two ways of remembering, because one is not enough. A rectangle is precise but
-needs a rendered page with coordinates — a text file, a text preview and some
-scans have none, and marking used to be simply unavailable there. An anchor
-needs only text, so any document we can read at all can be corrected. The
-rectangle is tried first and the anchor is the fallback; a drawn correction
-stores both.
+Three ways of finding it, tried in order of precision:
 
-The fingerprint is the supplier's VAT ID or IBAN when one is present, otherwise
-a hash of the non-numeric words in the top third of page one — the fixed labels
-of a template, which stay put while amounts and dates change.
+| | needs | used when |
+|---|---|---|
+| the rectangle | a page with coordinates | the same layout |
+| a spatial anchor — the label beside or above the value | only text | tables and forms, where reading order separates label from value |
+| the same-line anchor | only text | `Label: value` documents |
+
+A rectangle is exact but needs coordinates, which a text file and some scans do
+not have. An anchor needs only text, so anything readable at all can be
+corrected. A drawn correction stores both.
+
+### Recognising the document again
+
+The fingerprint is the sender's VAT ID or IBAN when there is one, otherwise a
+hash of the non-numeric words in the top third of page one — a template's fixed
+labels, which stay put while amounts and dates change.
+
+That hash is exact, and on a scan it moves: OCR reading one word differently
+between uploads is enough to change it, and the correction would silently stop
+applying. So the template's words are stored alongside the correction, and when
+the hash misses, the closest layout this company has taught us wins if it shares
+**62%** of its words. Below that it is a different template and nothing is
+applied.
+
+A label-shaped anchor — one ending in `:` or short enough to be a caption —
+also carries to the company's *other* layouts, so a correction survives a
+supplier redesigning their header. A long anchor that merely happened to precede
+the value does not travel, or it would match something coincidental elsewhere.
 
 ---
 
@@ -91,8 +145,10 @@ export MISTRAL_MODEL=mistral-large-latest
 export MISTRAL_OCR_MODEL=mistral-ocr-latest   # scans and photos
 ```
 
-Both are read at import time, so export them before starting uvicorn. Nothing
-in the app loads a `.env` file.
+All three are read at import time, so set them before the service starts.
+The service itself loads no `.env` file — that is deliberate, so a key cannot be
+committed by accident. Under Docker, `compose` reads `.env` and passes them in
+as environment variables, which amounts to the same thing.
 
 ### Scans and photos
 
@@ -175,11 +231,14 @@ offline reader: digital PDFs still work but much less well, and a scan is
 refused with a 415. Export `MISTRAL_API_KEY` before starting the service.
 
 **The database.** `docai.sqlite3` is ignored, so a fresh machine starts with the
-two seeded demo applications and nothing else. The API key written into
-`example_host/index.html` belongs to an application that does not exist there,
-and the panel will say *"That API key was not accepted."* Register an
-application in `/admin`, copy the key it shows once, and paste it into the
-iframe `src`.
+two seeded demo applications and nothing else. The key in
+`example_host/index.html` belongs to *this* machine's database, so on another
+one the panel refuses it: *"That API key does not match a registered
+application."* Register an application in `/admin`, copy the key it shows once,
+and replace the one in the iframe `src`.
+
+`dk_test_demo_key` is seeded on every fresh database if you want the sample to
+work before registering anything.
 
 **Learned corrections.** They live in that same database, so a new machine
 starts knowing nothing. That is the intended behaviour, not a fault.
@@ -198,12 +257,6 @@ python example_host/server.py               # terminal 2 — http://localhost:80
 Then open `/admin` (the password is printed on startup), register an
 application, and put its key in `example_host/index.html`.
 
-The form is built from the JSON the panel returns, not from a list of field
-names written into the page. Give the same page an application registered for
-delivery notes instead of invoices and it renders five different rows without
-being touched — which is the point of the service, and would be quietly undone
-by hardcoding an invoice form.
-
 Prefer this over `/host` when showing the integration: `/host` is served by the
 service itself, so it is same-origin and proves less. The sample runs on a
 different origin, which is the arrangement a customer actually has.
@@ -216,11 +269,11 @@ the sample that key:
 ```bash
 curl -u user1:1234 -X POST http://localhost:8077/api/admin/applications \
   -H 'Content-Type: application/json' \
-  -d '{"name":"Ledger — accounts payable","iframe_origin":"http://localhost:8090",
-       "target_schema": { ... }}'
-
-DOCAI_KEY=dk_live_… python example_host/server.py
+  -d '{"name":"Acme — purchase invoices","company_id":"acme-gmbh",
+       "iframe_origin":"http://localhost:8090","target_schema": { ... }}'
 ```
+
+Then put the key it returns into the iframe `src` in `example_host/index.html`.
 
 The panel then serves `Content-Security-Policy: frame-ancestors
 http://localhost:8090` and posts results to that origin only. Any other page
@@ -314,7 +367,11 @@ is fine for the demo and wrong for a pilot.
 | `POST /api/extract` | file + mode → fields with confidence, coordinates, and the target JSON |
 | `POST /api/feedback` | store corrected regions for the company |
 | `DELETE /api/company-data` | erase everything held for one company |
-| `/api/admin/*` | applications, learned regions, activity — Basic auth |
+| `/api/admin/applications` | list · register · update · `DELETE` one, with everything it learned |
+| `/api/admin/applications/{id}/key` | `POST` reissues the key, shown once |
+| `/api/admin/hints`, `/api/admin/runs` | stored corrections and run counters |
+
+Everything under `/api/admin/*` is behind Basic auth.
 
 Full schema at `/api/docs`. Uploads are capped at 15 MB, rejected on
 `Content-Length` before the body is read.
@@ -326,23 +383,25 @@ Full schema at `/api/docs`. Uploads are capped at 15 MB, rejected on
 Use the **Vosswerk** pair. It is the only one that defeats a good model, so it
 is the only one where the learning story is visible rather than asserted.
 
-1. Open `/host` — a pretend ERP with the panel embedded, signed in as `acme-gmbh`.
+1. Open <http://localhost:8090> — the sample application with the panel embedded.
 2. Drop `samples/invoice_vosswerk_1.pdf`. Everything comes back — and
    `customer_reference` reads `AB-55710`, confidently, at 82%. **That is the
    wrong answer.** `AB-55710` is the *supplier's* own Auftragsnummer, the only
    labelled order number on the page. Ours is `A-77/2026`, one of three bare
    codes stacked in the top right with no labels at all. From the text alone the
    model's answer is the reasonable one; only the position tells them apart.
-3. Switch to **Correct**, press *Mark* next to the reference, drag a box around
-   `A-77/2026`. The value prefills from the document. Save it.
+3. Switch to **Correct** and press **Fix** on that field. Type the right value,
+   or drag a box around `A-77/2026` on the page and it prefills from the
+   document. Press **Set** — that stores it; there is no second step.
 4. Drop `samples/invoice_vosswerk_2.pdf` — a later invoice from the same
    supplier, all values changed. The reference now reads `A-91/2026` — invoice
    two's own reference, not the one that was marked — flagged *learned* at 93%.
    Nothing was trained; the remembered rectangle was read.
-5. In `/admin` → *What it has learned*, show the single stored row: a field name
-   and four numbers. No document, no document text.
-6. In the demo controls on `/host`, switch the company to `bravo-ag` and read the
-   same invoice. It says `AB-56003` again — learning does not cross customers.
+5. Upload `invoice_vosswerk_1.pdf` again — the corrected value holds, because
+   the box is re-read rather than the old answer replayed.
+6. Register a second application under a different company, point the page at
+   its key, and read the same invoice. It says `AB-55710` again — learning does
+   not cross customers.
 
 The Helios pair is the gentler version of the same thing: its reference is
 unlabelled, which defeats the offline heuristic but not a real model. Use it
@@ -372,11 +431,23 @@ opens as well as closes.
   viewer are served from this app, so no end user's IP address reaches a US
   server — hotlinking Google Fonts, which the panel used to do, is itself a
   GDPR breach under LG München I 3 O 17493/20.
-- What persists per correction: a field path, a page number, a rectangle, and a
-  short text snippet the user typed. Visible and deletable in the admin area.
+- What persists per correction: a field path, a page number, a rectangle, the
+  label that locates the value, the template's header words, and a short
+  snippet. No document, and no document text.
+- There is no longer a screen listing what has been learned — it was removed as
+  clutter. The rows are still readable and deletable through
+  `GET`/`DELETE /api/admin/hints`, but *"show me everything you hold about this
+  company"* currently has no answer in the interface, and a data protection
+  officer will ask for one.
 - `DELETE /api/company-data?company_id=…` erases everything for one company.
 - Mistral is a French company processing in the EU; send calls with
   zero-retention enabled and put the DPA in place before any customer pilot.
+- `api.mistral.ai` sits behind Cloudflare, a US company, which terminates TLS at
+  whichever edge location is nearest the caller — from India that is Delhi, from
+  an EU server an EU city. So document content is decrypted outside our control
+  for one hop. Nothing in this repository calls Cloudflare; it is Mistral's
+  infrastructure. Ask them whether their edge is pinned to the EU, and name it in
+  the DPA: *"our model runs in France"* does not answer where TLS terminates.
 - Tokens carry an opaque `user_ref` supplied by the host, never a name.
 - The superadmin area requires a password, and has no default that is blank.
 
@@ -397,7 +468,10 @@ Deliberately out of scope, and each is a known piece of work:
   still comes from an env var with a default, and there is no rate limiting.
   (`iframe_origin` *is* enforced, both as `frame-ancestors` and as the
   `postMessage` target.)
-- **Operations.** SQLite, single process, no migrations, no monitoring.
+- **Operations.** SQLite, single process, one ad-hoc migration, no monitoring.
+- **Undoing a correction.** Pressing Set stores it for the whole company
+  immediately, and there is no button anywhere to take it back — only re-marking
+  the field or a `DELETE` against the API.
 - **The offline heuristic on foreign templates.** It now reads German compound
   labels, but on the Vosswerk invoice it still takes the supplier name as
   `Vosswerk Präzisionstechnik GmbH 4417-22`, because a code printed level with
@@ -412,14 +486,20 @@ None of these blocks the demo. All of them block production.
 
 ```
 app/
-  main.py        API and routes, upload limits
-  db.py          SQLite, five tables
-  document.py    PDF → positioned words, fingerprinting, region reads
-  providers.py   Mistral and the offline fallback
-  security.py    the no-login token handshake, superadmin password
-  static/        index · admin · embed · host
-    embed.js     the drop-in loader host applications include
-    vendor/      pdf.js and the two fonts, so nothing is fetched at runtime
-make_samples.py  demo invoices — helios, vosswerk, nordlys
-test_loop.py     end-to-end assertion of both demo paths
+  main.py            API and routes, upload limits, layout matching
+  db.py              SQLite, five tables, one migration
+  document.py        PDF → positioned words, rotation, fingerprint, anchors
+  providers.py       Mistral (extraction + OCR) and the offline fallback
+  security.py        the no-login token handshake, superadmin password
+  static/            index · admin · embed · host
+    embed.js         the drop-in loader, for hosts that want it
+    vendor/          pdf.js and two fonts, so nothing is fetched at runtime
+example_host/
+  index.html         a plain page: iframe in the markup, form filled by message
+  server.py          hands that file over; also shows the token arrangement
+Dockerfile           one image, two roles
+docker-compose.yml   the service on 8077, the sample app on 8090
+make_samples.py      demo invoices — helios, vosswerk, meier, nordlys
+test_loop.py         eight end-to-end assertions, both providers
+diagnose.py          why a given document does not work
 ```

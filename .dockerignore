@@ -1,0 +1,14 @@
+# Keep the build context small and never bake secrets or local state into an image.
+.venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+
+# Real credentials and local data — the container gets its own.
+.env
+example_host/.env
+docai.sqlite3
+
+# Generated at build time by make_samples.py
+samples/

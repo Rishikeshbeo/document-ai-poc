@@ -55,6 +55,11 @@ DOCAI_URL = os.environ.get("DOCAI_URL", "http://localhost:8077").rstrip("/")
 DOCAI_KEY = os.environ.get("DOCAI_KEY", "dk_test_demo_key")
 PORT = int(os.environ.get("PORT", "8090"))
 
+# Localhost by default, so running this on a laptop exposes nothing to the
+# network. In a container that would be unreachable from outside it, so
+# docker-compose sets BIND=0.0.0.0.
+BIND = os.environ.get("BIND", "127.0.0.1")
+
 # In your software this comes from the signed-in user's session. The panel
 # never asks anyone to log in; it inherits this.
 COMPANY_ID = os.environ.get("COMPANY_ID", "acme-gmbh")
@@ -118,7 +123,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+        server = ThreadingHTTPServer((BIND, PORT), Handler)
     except OSError as e:
         if e.errno != 98:
             raise
