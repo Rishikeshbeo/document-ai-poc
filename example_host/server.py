@@ -48,10 +48,21 @@ def load_env(path=os.path.join(HERE, ".env")):
             os.environ[name] = value
 
 
+# example_host/.env first, then the project .env that docker compose reads, so
+# a port set in one place works whether this runs in a container or not.
 load_env()
+load_env(os.path.join(HERE, os.pardir, ".env"))
 
 # Where the Document AI service is, and the key it issued for this application.
 DOCAI_URL = os.environ.get("DOCAI_URL", "http://localhost:8077").rstrip("/")
+
+# What the *browser* should dial for the service. Inside Docker that is the
+# published host port, not the container's, so it cannot be guessed from here —
+# compose passes SERVICE_URL, and SERVICE_PORT alone is enough otherwise. This
+# is substituted into index.html as it is served, which is what makes the port
+# a single setting in .env rather than a string repeated in the markup.
+SERVICE_URL = os.environ.get("SERVICE_URL", "").rstrip("/") or \
+    f"http://localhost:{os.environ.get('SERVICE_PORT', '8077')}"
 DOCAI_KEY = os.environ.get("DOCAI_KEY", "dk_test_demo_key")
 PORT = int(os.environ.get("PORT", "8090"))
 
@@ -73,7 +84,11 @@ class Handler(BaseHTTPRequestHandler):
             # and the company in its own markup, so this hands over bytes and
             # nothing else — any static file host would do the same job.
             with open(os.path.join(HERE, "index.html"), "rb") as f:
-                self._send(200, f.read(), "text/html; charset=utf-8")
+                page = f.read()
+            # The only substitution: where the browser reaches the service.
+            # The API key stays in the markup, as it is meant to.
+            page = page.replace(b"__SERVICE_URL__", SERVICE_URL.encode())
+            self._send(200, page, "text/html; charset=utf-8")
         else:
             self._send(404, b"Not found", "text/plain")
 
@@ -136,6 +151,7 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     print(f"\n  Example application on http://localhost:{PORT}")
+    print(f"  Panel served from {SERVICE_URL}")
     print(f"  Embedding the panel from {DOCAI_URL}")
     print(f"  Signed in as {USER_REF} at company {COMPANY_ID}\n")
     try:

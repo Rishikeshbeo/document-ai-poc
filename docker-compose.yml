@@ -6,6 +6,11 @@
 # then open http://localhost:8090 (the sample app) or http://localhost:8077/admin
 # (superadmin, user1 / 1234).
 #
+# Ports already taken? Put SERVICE_PORT / HOST_APP_PORT in .env. If you move the
+# service port, change the two http://localhost:8077 references in
+# example_host/index.html to match — the browser talks to the host port, not the
+# container's.
+#
 # Without a key it still runs, on the offline reader: digital PDFs work less
 # well and scans are refused, because OCR needs Mistral.
 
@@ -14,7 +19,11 @@ services:
     build: .
     image: docai
     ports:
-      - "8077:8077"
+      # Left side is the port on your machine: change it in .env if 8077 is
+      # taken. The right side stays put — it is inside the container.
+      # Changing it means also changing the two service URLs in
+      # example_host/index.html, because the browser dials the host port.
+      - "${SERVICE_PORT:-8077}:8077"
     environment:
       # Passed through from your shell or a .env file beside this one. Never
       # baked into the image.
@@ -36,11 +45,22 @@ services:
     # Same image, different role: serve example_host/index.html.
     command: ["python", "example_host/server.py"]
     ports:
-      - "8090:8090"
+      - "${HOST_APP_PORT:-8090}:8090"
     environment:
       PORT: "8090"
       # A container's localhost is its own, so listen on all interfaces.
       BIND: "0.0.0.0"
+      # What the browser should dial for the service: the published host port,
+      # which the container cannot work out for itself. Substituted into
+      # index.html as it is served, so SERVICE_PORT in .env is the only place
+      # the port is written down.
+      SERVICE_URL: "http://localhost:${SERVICE_PORT:-8077}"
+      # Reached from inside the container network, not from the browser.
+      DOCAI_URL: "http://service:8077"
+    volumes:
+      # Mounted rather than baked in, so editing the page shows on refresh
+      # instead of needing --build.
+      - ./example_host/index.html:/app/example_host/index.html:ro
     depends_on:
       - service
     restart: unless-stopped
