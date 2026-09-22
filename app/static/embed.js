@@ -5,9 +5,13 @@
  *   <script>
  *     DocAI.mount('#docai', {
  *       token: TOKEN,                     // from POST /api/session on your server
+ *       dropTarget: document.body,        // optional: drop a file anywhere on the page
  *       onAccept: json => fillForm(json)  // user pressed "Use this data"
  *     });
  *   </script>
+ *
+ * The handle it returns also has read(file), for a file that arrives some other
+ * way — your own file input, a paste, a fetch.
  *
  * The service origin is taken from this script's own src, so the host never
  * configures a URL and every inbound message is checked against it. No
@@ -87,9 +91,68 @@
 
     window.addEventListener('message', onMessage);
 
+    // Hand a file to the panel, as though it had been dropped on it. The panel
+    // is a small part of a host page and a file dropped on the rest of that
+    // page is the common gesture; this is how it gets across the iframe
+    // boundary. Files are posted as a plain array — a FileList does not
+    // reliably survive the clone.
+    function read(files) {
+      var list = files && typeof files.length === 'number'
+        ? Array.prototype.slice.call(files)
+        : (files ? [files] : []);
+      if (!list.length) return;
+      iframe.contentWindow.postMessage({ type: 'docai:read', files: list }, ORIGIN);
+    }
+
+    // Opt in with dropTarget: document.body — the element becomes a drop zone
+    // that forwards to the panel. Worth having here rather than in every host
+    // page, because the half people forget is the preventDefault: the browser's
+    // default for a dropped file is to navigate to it, so one miss throws the
+    // page away and takes any typed-in form data with it.
+    var detachDrop = null;
+    if (opts.dropTarget) {
+      var zone = resolve(opts.dropTarget);
+      var depth = 0;
+      var dragging = function (e) {
+        var types = (e.dataTransfer || {}).types || [];
+        return Array.prototype.indexOf.call(types, 'Files') !== -1;
+      };
+      var mark = function (on) {
+        if (opts.dropClass !== null) zone.classList.toggle(opts.dropClass || 'docai-dropping', on);
+      };
+      var enter = function (e) { if (dragging(e)) { e.preventDefault(); depth++; mark(true); } };
+      var over = function (e) {
+        if (!dragging(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      };
+      var leave = function (e) {
+        if (!dragging(e)) return;
+        depth = Math.max(0, depth - 1);
+        if (!depth) mark(false);
+      };
+      var dropped = function (e) {
+        e.preventDefault();
+        depth = 0;
+        mark(false);
+        if (dragging(e)) read(e.dataTransfer.files);
+      };
+      zone.addEventListener('dragenter', enter);
+      zone.addEventListener('dragover', over);
+      zone.addEventListener('dragleave', leave);
+      zone.addEventListener('drop', dropped);
+      detachDrop = function () {
+        zone.removeEventListener('dragenter', enter);
+        zone.removeEventListener('dragover', over);
+        zone.removeEventListener('dragleave', leave);
+        zone.removeEventListener('drop', dropped);
+      };
+    }
+
     return {
       iframe: iframe,
       origin: ORIGIN,
+      read: function (files) { read(files); return this; },
       on: function (name, fn) {
         if (!handlers[name]) handlers[name] = [];
         handlers[name].push(fn);
@@ -97,6 +160,7 @@
       },
       destroy: function () {
         window.removeEventListener('message', onMessage);
+        if (detachDrop) detachDrop();
         if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
       }
     };

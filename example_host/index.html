@@ -101,6 +101,31 @@
     display: block;
   }
 
+  /* While files are being dragged over this page. The panel draws its own cue
+     when the pointer is over the iframe — drag events inside it do not reach
+     this document — so the two never show at once. */
+  body.dropping {
+    outline: 3px dashed var(--brand);
+    outline-offset: -3px;
+  }
+
+  body.dropping::after {
+    content: "Drop an invoice anywhere — it goes to the panel";
+    position: fixed;
+    left: 50%;
+    bottom: 22px;
+    transform: translateX(-50%);
+    background: var(--brand);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 16px;
+    border-radius: 999px;
+    box-shadow: 0 4px 14px rgba(27, 36, 48, .25);
+    pointer-events: none;
+    z-index: 50;
+  }
+
   .row {
     display: grid;
     grid-template-columns: 170px 1fr;
@@ -227,8 +252,8 @@
   <p class="lede">
     A plain HTML page. The panel is the iframe below, with the API key and the
     company written straight into the markup — there is no backend here at all.
-    The form on the right is this application's own; drop a document into the
-    panel and watch it fill.
+    The form on the right is this application's own; drop a document anywhere on
+    this page, or choose one in the panel, and watch it fill.
   </p>
 
   <div class="cols">
@@ -244,7 +269,7 @@
       <iframe
         id="docai"
         height="760"
-        src="__SERVICE_URL__/embed?key=dk_live_rBKKOUmcjn5Emxv6QRAc75j7GMimAe2B"></iframe>
+        src="__SERVICE_URL__/embed?key=dk_live_A0fy3GDpPuDRy-_nCtIYzrA-UZGfVIQy"></iframe>
       
 
     </div>
@@ -882,6 +907,113 @@ $('post').onclick = () => {
   );
 
 };
+
+
+// ================================================================
+// DRAG AND DROP ANYWHERE ON THIS PAGE
+// ================================================================
+//
+// The panel is one column of this page, and dropping an invoice on the other
+// one — or on the header, or on the gap between them — is the gesture people
+// actually make. Two things have to happen for that to work.
+//
+// First, preventDefault on dragover and drop. The browser's default for a
+// dropped file is to navigate to it, so without this a miss replaces the whole
+// application with a view of the PDF and takes every typed-in form value with
+// it. That is the half worth copying into your own page even if you skip the
+// rest.
+//
+// Second, the file has to reach the panel. This page cannot touch the inside of
+// a cross-origin iframe, so it posts the file over instead — docai:read, to the
+// service origin and nowhere else. A File survives postMessage intact, so the
+// panel reads it exactly as if it had been dropped on the panel itself.
+
+let dragDepth = 0;
+
+function draggingFiles(event) {
+
+  const types =
+    (event.dataTransfer || {}).types || [];
+
+  return Array.prototype.indexOf.call(
+    types,
+    'Files'
+  ) !== -1;
+
+}
+
+// dragenter and dragleave fire again for every element the pointer crosses, so
+// counting them is what stops the highlight flickering on the way in.
+window.addEventListener('dragenter', event => {
+
+  if (!draggingFiles(event)) {
+    return;
+  }
+
+  event.preventDefault();
+
+  dragDepth++;
+
+  document.body.classList.add('dropping');
+
+});
+
+window.addEventListener('dragover', event => {
+
+  if (!draggingFiles(event)) {
+    return;
+  }
+
+  event.preventDefault();
+
+  event.dataTransfer.dropEffect = 'copy';
+
+});
+
+window.addEventListener('dragleave', event => {
+
+  if (!draggingFiles(event)) {
+    return;
+  }
+
+  dragDepth = Math.max(0, dragDepth - 1);
+
+  if (!dragDepth) {
+    document.body.classList.remove('dropping');
+  }
+
+});
+
+window.addEventListener('drop', event => {
+
+  event.preventDefault();
+
+  dragDepth = 0;
+
+  document.body.classList.remove('dropping');
+
+  if (!draggingFiles(event)) {
+    return;
+  }
+
+  const files = Array.prototype.slice.call(
+    event.dataTransfer.files
+  );
+
+  if (!files.length) {
+    return;
+  }
+
+  $('docai').contentWindow.postMessage(
+    { type: 'docai:read', files: files },
+    DOCAI_ORIGIN
+  );
+
+  say(
+    `dropped ${files[0].name} · handed to the panel`
+  );
+
+});
 
 
 // ================================================================

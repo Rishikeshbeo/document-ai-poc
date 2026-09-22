@@ -49,7 +49,13 @@ def ocr(data: bytes, filename: str):
     Block-level boxes are what make the correction loop survive OCR, so ask
     for them. They need OCR 4 or newer; on an older model the response simply
     carries no blocks and the caller finds pages with text but no words.
+
+    A photo is turned the right way up first. The coordinates that come back
+    are in the grid of whatever was sent, so sending the grid the reader is
+    shown is the whole of what makes a drawn rectangle mean the same thing at
+    both ends.
     """
+    data = document.upright(data, filename)
     mime = document.sniff(data, filename)
     encoded = base64.b64encode(data).decode()
     if mime.startswith("image/"):

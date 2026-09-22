@@ -22,6 +22,13 @@ except ImportError:      # pragma: no cover
     # service.
     PdfReader = None
 
+try:
+    from PIL import Image, ImageOps
+except ImportError:      # pragma: no cover
+    # Arrives with pdfplumber, so it is here in practice. Without it a photo
+    # taken in portrait is read on its side — see `upright`.
+    Image = None
+
 VAT_RE = re.compile(
     r"\b(?:DE|ATU?|FR|NL|BE|IT|ES|PL|SE|DK|FI|IE|PT|CZ|HU|RO|LU|NO|CH|BG|EE|LV|LT"
     r"|SI|SK|HR|CY|MT|EL|GR|GB)\s?[0-9A-Z]{8,12}\b"
@@ -93,6 +100,48 @@ def load(data: bytes, filename: str):
     if mime == "text/plain":
         return _load_text(data.decode("utf-8", "replace"))
     raise ValueError("This build reads PDF, plain text, and images.")
+
+
+EXIF_ORIENTATION = 0x0112
+
+
+def upright(data: bytes, filename: str = "") -> bytes:
+    """Bake a photo's EXIF orientation into its pixels.
+
+    A phone stores the sensor's pixels the way it read them and writes an
+    Orientation tag saying which way up they go. Browsers apply that tag; OCR
+    services read the stored grid and ignore it. So a photo of an invoice taken
+    in portrait is read from a landscape grid, and every word box comes back a
+    quarter turn from where the reader sees it: the panel draws its rectangles
+    in the wrong corner, a rectangle the user drags is read somewhere else
+    entirely, and a saved correction can never be found again.
+
+    This is the same failure `/Rotate` causes on a PDF, and it is handled the
+    same way — normalise before reading, so one grid means one thing to the
+    browser and to the server.
+
+    The format is kept, so a JPEG stays a JPEG: the bytes go straight to OCR
+    and nothing is written to disk. Anything unreadable here is returned
+    untouched, which is the behaviour before this existed.
+    """
+    if Image is None:
+        return data
+    if not sniff(data, filename).startswith("image/"):
+        return data
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            if (im.getexif() or {}).get(EXIF_ORIENTATION, 1) in (1, None):
+                return data              # already upright; no re-encode
+            fmt = (im.format or "PNG").upper()
+            fixed = ImageOps.exif_transpose(im)
+            buf = io.BytesIO()
+            # 95 rather than the default 75: this is an invoice being read, and
+            # a re-encode that softens small print costs accuracy downstream.
+            extra = {"quality": 95} if fmt in ("JPEG", "WEBP") else {}
+            fixed.save(buf, format=fmt, **extra)
+            return buf.getvalue()
+    except Exception:
+        return data
 
 
 SLACK = 0.02   # a glyph may overhang the page box by a hair; nothing overhangs by more

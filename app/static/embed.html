@@ -53,8 +53,13 @@
     <p class="muted small" style="margin:0 auto">PDF, scan or photo · nothing is stored</p>
     <p style="margin:14px 0 0"><button class="primary" id="pick">Choose a file</button></p>
     <input type="file" id="file" class="hidden"
-           accept=".pdf,.txt,.csv,.md,.png,.jpg,.jpeg,.webp,.tif,.tiff,.bmp">
+           accept=".pdf,.txt,.csv,.md,.png,.jpg,.jpeg,.webp,.gif,.tif,.tiff,.bmp">
   </div>
+
+  <!-- Shown only while files are being dragged over the panel. The dashed box
+       is hidden once a document is on screen, so without this there is nothing
+       to say that letting go here will read the next one. -->
+  <div class="drop-hint"><span>Drop to read this document</span></div>
 
   <div id="busy" class="notice hidden"><span class="spin"></span> &nbsp;Reading <span id="busyName"></span>…</div>
   <div id="err" class="notice warn hidden"></div>
@@ -181,17 +186,11 @@ $('modeTrain').onclick = () => setMode('training');
 
 const drop = $('drop');
 $('pick').onclick = () => $('file').click();
-$('file').onchange = e => e.target.files[0] && handle(e.target.files[0]);
-['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, e => {
-  e.preventDefault(); drop.classList.add('over');
-}));
-['dragleave', 'drop'].forEach(t => drop.addEventListener(t, e => {
-  e.preventDefault(); drop.classList.remove('over');
-}));
-drop.addEventListener('drop', e => e.dataTransfer.files[0] && handle(e.dataTransfer.files[0]));
+$('file').onchange = e => accept(e.target.files);
 $('again').onclick = () => {
   $('result').classList.add('hidden'); drop.classList.remove('hidden');
   $('saved').classList.add('hidden');
+  $('err').classList.add('hidden');
   state.pending = {}; state.editing = null; state.marking = null;
   // Clearing the input matters: with the same file still selected, choosing it
   // again changes nothing, no change event fires and the document is never
@@ -199,7 +198,95 @@ $('again').onclick = () => {
   $('file').value = '';
 };
 
-async function handle(file) {
+// One document per read, whichever way it arrives: the API takes one file per
+// call. Dropping a folder of invoices and silently reading one of them is
+// worse than reading the first and saying so.
+function accept(files) {
+  const list = Array.prototype.slice.call(files || []);
+  if (!list.length) return;
+  handle(list[0], list.length > 1
+    ? `${list.length} files dropped — reading ${list[0].name}, one at a time in this build`
+    : '');
+}
+
+// --- drag and drop ----------------------------------------------------------
+//
+// The whole panel is the drop target, not only the dashed box. Both reasons are
+// things that happened rather than things that might:
+//
+//   * the panel is much taller than the box, and a file let go an inch low
+//     landed on the document behind it — the browser's default for a dropped
+//     file is to open it, so the iframe navigated to the PDF and the panel
+//     vanished. That reads as a crash, not as a miss.
+//   * once a document is read the box is hidden, so there was no target at all
+//     for the next invoice. You had to find "Read another" first, and dropping
+//     before you did threw the panel away as above.
+//
+// So every drop anywhere in the panel is swallowed, and the ones carrying files
+// are read. A drag that is not files — text, or a rectangle being drawn on the
+// page — is left entirely alone.
+
+let dragDepth = 0;
+
+function draggingFiles(e) {
+  const types = (e.dataTransfer || {}).types || [];
+  return Array.prototype.indexOf.call(types, 'Files') !== -1;
+}
+
+function showDropTarget(on) {
+  document.body.classList.toggle('dropping', on);
+  drop.classList.toggle('over', on);
+}
+
+// dragenter and dragleave fire again for every child element the pointer
+// crosses, so a plain flag switches the highlight off over every heading and
+// button on the way in. Counting enters against leaves is what holds it steady.
+window.addEventListener('dragenter', e => {
+  if (!draggingFiles(e)) return;
+  e.preventDefault();
+  dragDepth++;
+  showDropTarget(true);
+});
+window.addEventListener('dragover', e => {
+  if (!draggingFiles(e)) return;
+  e.preventDefault();        // without this on every dragover, no drop fires
+  e.dataTransfer.dropEffect = 'copy';
+});
+window.addEventListener('dragleave', e => {
+  if (!draggingFiles(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) showDropTarget(false);
+});
+window.addEventListener('drop', e => {
+  // Unconditional: a file let go anywhere in here must never navigate the
+  // panel away, whether or not we go on to read it.
+  e.preventDefault();
+  dragDepth = 0;
+  showDropTarget(false);
+  if (draggingFiles(e)) accept(e.dataTransfer.files);
+});
+
+// --- a file handed in by the host page --------------------------------------
+//
+// The host application's own page is far bigger than this panel, and dropping
+// an invoice anywhere on it is the natural gesture. That page cannot reach
+// into the iframe, so it posts the file across instead.
+//
+// Checked the same way outbound data is, and for the same reason: only the
+// window that framed us, and only the origin registered for this application.
+// Nothing is accepted before /api/session-info has said what that origin is.
+window.addEventListener('message', e => {
+  if (window.parent === window || e.source !== window.parent) return;
+  if (!parentOrigin) return;
+  if (parentOrigin !== '*' && e.origin !== parentOrigin) return;
+  const msg = e.data;
+  if (!msg || msg.type !== 'docai:read') return;
+  // A File survives postMessage as a File, so the name and bytes arrive intact
+  // and this is the same path a local drop takes.
+  accept(msg.files || (msg.file ? [msg.file] : []));
+});
+
+async function handle(file, aside = '') {
   $('err').classList.add('hidden');
   $('saved').classList.add('hidden');
   state.pending = {};
@@ -231,7 +318,8 @@ async function handle(file) {
     // field cannot be marked, or why the page looks like plain text. How many
     // regions were applied is our business, not theirs.
     const note = [];
-    if (!state.pageEls.length) note.push('text preview — corrections are remembered by label here, not by region');
+    if (aside) note.push(aside);
+    if (!state.pageEls.length) note.push('no page to draw on — corrections are remembered by label here, not by region');
     $('hintNote').textContent = note.join(' · ');
     renderFields();
     $('result').classList.remove('hidden');
@@ -274,16 +362,34 @@ async function renderDocument(file) {
     const wrap = document.createElement('div');
     wrap.className = 'page-wrap';
     const img = document.createElement('img');
-    img.style.cssText = 'display:block;width:100%';
     img.alt = file.name;
     const overlay = document.createElement('div');
     overlay.className = 'overlay';
     wrap.append(img, overlay);
     viewer.appendChild(wrap);
-    await new Promise(res => {
-      img.onload = img.onerror = res;
-      img.src = URL.createObjectURL(file);
+    const url = URL.createObjectURL(file);
+    const ok = await new Promise(res => {
+      img.onload = () => res(true);
+      img.onerror = () => res(false);
+      img.src = url;
     });
+    // A TIFF is a normal scanner output and the service reads it, but no
+    // browser will put one in an <img>. Registering the page anyway left a
+    // broken-image icon with a crosshair over it: Fix said "drag a box" and a
+    // drag on nothing recorded a rectangle against a picture the user never
+    // saw. Say what happened instead and let the typed correction carry it —
+    // that path needs no coordinates.
+    if (!ok) {
+      URL.revokeObjectURL(url);
+      wrap.remove();
+      const note = document.createElement('p');
+      note.className = 'small muted';
+      note.style.cssText = 'padding:14px;margin:0;background:#fff';
+      note.textContent = 'This browser cannot display ' + (file.name || 'that image')
+        + '. It was read on the server — correct a field by typing the value.';
+      viewer.appendChild(note);
+      return;
+    }
     state.textLayers.push([]);
     state.pageEls.push({ page: 1, overlay, wrap });
     attachMarking(1, overlay);

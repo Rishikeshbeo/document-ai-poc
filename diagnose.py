@@ -21,10 +21,18 @@ def main(path):
     print(f"\n{name}\n" + "=" * len(name))
 
     data = open(path, "rb").read()
-    print(f"\n1. FILE       {len(data) / 1024:.0f} KB · sniffed as {document.sniff(data, name)}")
+    mime = document.sniff(data, name)
+    print(f"\n1. FILE       {len(data) / 1024:.0f} KB · sniffed as {mime}")
     if len(data) > 15 * 1024 * 1024:
         print("   STOP: over the 15 MB cap, the service refuses it before reading.")
         return
+
+    # A photo whose EXIF says it is turned is the one case where the file reads
+    # perfectly and every coordinate is still wrong, so say so here rather than
+    # leaving it to be discovered as "the box landed in the wrong place".
+    if mime.startswith("image/") and document.upright(data, name) is not data:
+        print("   Turned by its EXIF orientation tag. The service uprights it before")
+        print("   reading, so the boxes match what the browser shows.")
 
     # --- stage 2: is there a text layer at all? -----------------------------
     try:
@@ -32,10 +40,11 @@ def main(path):
     except document.NeedsOCR:
         print("\n2. TEXT       none — this is a scan or a photo.")
         if providers.ocr_available():
-            print("   The service would send it to Mistral OCR. Word positions come back")
-            print("   reconstructed from paragraph blocks, so drawing a box is approximate")
-            print("   inside a tall paragraph and near-exact on a single line.")
-            print("   Re-run this with MISTRAL_API_KEY set to see the OCR result.")
+            print("   The service would send it to Mistral OCR and read it. Word positions")
+            print("   come back reconstructed from paragraph blocks, so drawing a box is")
+            print("   approximate inside a tall paragraph and near-exact on a single line.")
+            print("   Not called from here: this tool uploads nothing. Upload it to the")
+            print("   panel to see the words themselves.")
         else:
             print("   STOP: no MISTRAL_API_KEY, so the service returns 415 and there is")
             print("   no document to mark at all. This is the most common cause.")

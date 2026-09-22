@@ -168,6 +168,30 @@ cannot honour.
 
 There is no offline OCR. Without a key a scan returns 415 saying so.
 
+### Photo orientation
+
+A phone stores the pixels its sensor read and writes an EXIF `Orientation` tag
+saying which way up they go. Every browser applies that tag. OCR services read
+the stored grid and ignore it.
+
+So a photo of an invoice taken in portrait arrives as a landscape grid, and
+every word box comes back a quarter turn from where the reader sees it. The
+panel then draws its rectangles in the wrong corner, a rectangle the user drags
+is read somewhere else entirely, and a saved correction can never be found
+again — the correction loop is silently broken on exactly the files people
+photograph.
+
+`document.upright` bakes the orientation into the pixels before the bytes go to
+OCR, so the grid the browser shows and the grid the coordinates are in are the
+same one. The format is kept — a JPEG stays a JPEG, re-encoded at quality 95 so
+small print does not soften — and nothing is written to disk. All eight EXIF
+orientations, including the mirrored ones, normalise to the same grid: a region
+marked on `invoice_vosswerk_1.pdf` is read out of `invoice_vosswerk_1_photo.jpg`
+by its rectangle.
+
+This is the same failure `/Rotate` causes on a PDF, handled the same way and
+for the same reason.
+
 ### Rotated pages
 
 A page carrying `/Rotate` — the norm in scanned batches — cannot be read
@@ -312,6 +336,7 @@ const { token } = await fetch('https://docai.example/api/session', {
 <script>
   DocAI.mount('#docai', {
     token: TOKEN,
+    dropTarget: document.body,        // drop a file anywhere on your page
     onAccept: m => fillForm(m.json)   // user pressed "Use this data"
   });
 </script>
@@ -331,12 +356,42 @@ configuration beyond the token and has no dependencies.
 | `onSave` | a correction was stored; `{saved, regions, company_id}` |
 | `onError` | `{message}` |
 | `height`, `autoResize`, `className` | frame sizing, `autoResize` on by default |
+| `dropTarget` | an element (or selector) that becomes a drop zone forwarding files to the panel — see below. `dropClass` names the class it toggles while dragging, default `docai-dropping` |
 
-Returns `{iframe, origin, on(event, fn), destroy()}`. The raw
+Returns `{iframe, origin, read(file), on(event, fn), destroy()}`. The raw
 `window.addEventListener('message', …)` contract still works unchanged if you
 would rather not load the script — the wire events are `docai:ready`,
 `docai:result`, `docai:corrected`, `docai:accepted`, `docai:save`, `docai:error`,
 `docai:resize`.
+
+### Dragging a file in
+
+The panel itself takes a drop anywhere on it — on the dashed box, on the field
+list, on a document already open, which then reads the new one. Every drop
+inside the panel is swallowed whether or not it carries a file, because the
+browser's default for a dropped file is to navigate to it: one miss would
+replace the panel with a view of the PDF.
+
+Your own page is the bigger target, and it has to do the same two things. Pass
+`dropTarget` and `embed.js` does both for you; the one message it sends is also
+the whole contract if you would rather write it yourself:
+
+```js
+// preventDefault on dragover AND drop, or a miss throws your page away
+panelIframe.contentWindow.postMessage(
+  { type: 'docai:read', files: [file] },   // a File survives the clone intact
+  'https://docai.example'                  // the service origin, never '*'
+);
+```
+
+The panel accepts `docai:read` only from the window that framed it, and only
+from the origin registered for the application — nothing at all until
+`/api/session-info` has said what that origin is. At the default
+`iframe_origin: "*"` any framing page may hand files in, which is the same
+latitude `*` already gives it over the session.
+
+`example_host/index.html` wires this by hand, without `embed.js`, if you want
+to see it written out.
 
 A correction is applied to the target JSON as soon as the user confirms it, so
 `docai:accepted` always carries the corrected values — numbers coerced to
@@ -399,7 +454,11 @@ is the only one where the learning story is visible rather than asserted.
    Nothing was trained; the remembered rectangle was read.
 5. Upload `invoice_vosswerk_1.pdf` again — the corrected value holds, because
    the box is re-read rather than the old answer replayed.
-6. Register a second application under a different company, point the page at
+6. Drop `samples/invoice_vosswerk_1_photo.jpg` — the same invoice as a sideways
+   phone photo, no text layer at all. It goes to OCR, comes back upright, and
+   the reference still reads `A-77/2026` from the rectangle marked on the PDF.
+   (Needs `MISTRAL_API_KEY`; there is no offline OCR.)
+7. Register a second application under a different company, point the page at
    its key, and read the same invoice. It says `AB-55710` again — learning does
    not cross customers.
 
@@ -488,7 +547,7 @@ None of these blocks the demo. All of them block production.
 app/
   main.py            API and routes, upload limits, layout matching
   db.py              SQLite, five tables, one migration
-  document.py        PDF → positioned words, rotation, fingerprint, anchors
+  document.py        PDF/photo → positioned words, rotation, fingerprint, anchors
   providers.py       Mistral (extraction + OCR) and the offline fallback
   security.py        the no-login token handshake, superadmin password
   static/            index · admin · embed · host
@@ -499,7 +558,7 @@ example_host/
   server.py          hands that file over; also shows the token arrangement
 Dockerfile           one image, two roles
 docker-compose.yml   the service on 8077, the sample app on 8090
-make_samples.py      demo invoices — helios, vosswerk, meier, nordlys
+make_samples.py      demo invoices — helios, vosswerk, meier, nordlys, one photo
 test_loop.py         eight end-to-end assertions, both providers
 diagnose.py          why a given document does not work
 ```

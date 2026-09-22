@@ -14,6 +14,9 @@ Three templates:
             what a marked region supplies. This is the pair to demo on.
 
   nordlys   a different supplier entirely, everything neatly labelled.
+
+Plus one photo: the vosswerk invoice as a JPEG carrying an EXIF orientation
+tag, which is what a phone produces and the only sample with no text layer.
 """
 
 import os
@@ -198,6 +201,33 @@ def nordlys(path):
     c.save()
 
 
+def photo(pdf_path, out_path, orientation=6):
+    """The same invoice as a phone photo: no text layer, and turned on its side.
+
+    Written the way a camera writes it — the pixels stored as the sensor read
+    them, with an EXIF tag saying which way up they go. Browsers apply that tag
+    and OCR services ignore it, so this is the file that proves the service
+    normalises orientation before reading rather than after: mark a field on
+    the PDF and the rectangle has to be read out of this one too.
+
+    Needs Pillow and pypdfium2, which arrive with pdfplumber. Skipped rather
+    than fatal, so `make_samples.py` still runs on reportlab alone.
+    """
+    try:
+        import pypdfium2
+        from PIL import Image
+    except ImportError:
+        print("  (skipped the photo sample: needs Pillow and pypdfium2)")
+        return
+    page = pypdfium2.PdfDocument(pdf_path)[0]
+    # 150 dpi — a legible phone snap, not an archival scan.
+    image = page.render(scale=150 / 72).to_pil().convert("RGB")
+    turns = {6: 90, 3: 180, 8: 270}.get(orientation, 0)
+    exif = Image.Exif()
+    exif[0x0112] = orientation
+    image.rotate(turns, expand=True).save(out_path, quality=88, exif=exif)
+
+
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     helios(f"{OUT}/invoice_helios_1.pdf", "HK-2026-04417", "2026-07-14", "2026-08-13",
@@ -213,4 +243,5 @@ if __name__ == "__main__":
     meier(f"{OUT}/invoice_meier_1.pdf", "MM-001")
     meier(f"{OUT}/invoice_meier_2.pdf", "MM-002", header_extra="Filiale Nord")
     nordlys(f"{OUT}/invoice_nordlys.pdf")
+    photo(f"{OUT}/invoice_vosswerk_1.pdf", f"{OUT}/invoice_vosswerk_1_photo.jpg")
     print("wrote", sorted(os.listdir(OUT)))

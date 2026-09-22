@@ -3,5 +3,7 @@ uvicorn[standard]>=0.27
 python-multipart>=0.0.9
 pdfplumber>=0.11
 pypdf>=4.0            # only to neutralise page rotation before extraction
+pillow>=10.0          # only to neutralise photo orientation before OCR
+pypdfium2>=4.0        # only for the photo sample in make_samples.py
 httpx>=0.27
 reportlab>=4.0        # only for make_samples.py
